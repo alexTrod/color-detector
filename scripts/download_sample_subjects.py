@@ -59,9 +59,9 @@ def configured_openneuro_datasets() -> list[str]:
     return sorted(set(ids))
 
 
-def download_openneuro_yoto_five(subjects: list[str]) -> dict:
+def download_openneuro_yoto_five(subjects: list[str], raw_root: Path = RAW_ROOT) -> dict:
     """Download ds005815 for given subjects, task-task and rest1 EEG."""
-    target = RAW_ROOT / "ds005815"
+    target = raw_root / "ds005815"
     target.mkdir(parents=True, exist_ok=True)
     include = ["dataset_description.json", "CHANGES", "README"] # removed  "participants.tsv", "participants.json"
     for sub in subjects:
@@ -114,11 +114,12 @@ def download_openneuro_subject(
     dataset_id: str,
     subjects: list[str] | None = None,
     task_glob: str | None = None,
+    raw_root: Path = RAW_ROOT,
 ) -> dict:
     if subjects is None:
         subjects = [openneuro_first_subject(dataset_id)]
     use_sample_dir = len(subjects) == 1 and task_glob is None and dataset_id != "ds005815"
-    target = RAW_ROOT / (f"{dataset_id}_sample" if use_sample_dir else dataset_id)
+    target = raw_root / (f"{dataset_id}_sample" if use_sample_dir else dataset_id)
     target.mkdir(parents=True, exist_ok=True)
 
     run_glob = {
@@ -198,7 +199,7 @@ def osf_files(node: str, token: str | None) -> list[dict]:
     return out
 
 
-def download_hajonides_subject() -> dict:
+def download_hajonides_subject(raw_root: Path = RAW_ROOT) -> dict:
     osf_url = "https://osf.io/j289e/?view_only=b13407009b4245f7950960c34a5474a6"
     node, token = parse_osf_info(osf_url)
     files = osf_files(node, token)
@@ -217,7 +218,7 @@ def download_hajonides_subject() -> dict:
 
     download_url = candidate["links"]["download"]
     name = candidate["attributes"]["name"]
-    target = RAW_ROOT / "hajonides_j289e"
+    target = raw_root / "hajonides_j289e"
     target.mkdir(parents=True, exist_ok=True)
     out_path = target / name
 
@@ -237,8 +238,54 @@ def download_hajonides_subject() -> dict:
     }
 
 
+def write_download_manifest(
+    downloads: list[dict],
+    manifest_path: Path = MANIFEST,
+) -> dict:
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = {"downloads": downloads}
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    print(f"Wrote manifest: {manifest_path}")
+    return {"n_downloads": len(downloads), "manifest": str(manifest_path)}
+
+
+def download_yoto_five(
+    max_subjects: int = 5,
+    raw_root: Path = RAW_ROOT,
+) -> dict:
+    subs = openneuro_subject_list("ds005815", max_subjects=max_subjects)
+    return download_openneuro_yoto_five(subs, raw_root=raw_root)
+
+
+def download_openneuro_subjects(
+    dataset_ids: list[str],
+    max_subjects: int | None = 1,
+    task_globs: dict[str, str] | None = None,
+    raw_root: Path = RAW_ROOT,
+) -> list[dict]:
+    results = []
+    task_globs = task_globs or {}
+    for dataset_id in dataset_ids:
+        subjects = None
+        if max_subjects is not None:
+            subjects = openneuro_subject_list(dataset_id, max_subjects=max_subjects)
+        try:
+            results.append(
+                download_openneuro_subject(
+                    dataset_id,
+                    subjects=subjects,
+                    task_glob=task_globs.get(dataset_id),
+                    raw_root=raw_root,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            results.append({"dataset": dataset_id, "error": str(exc)})
+    return results
+
+
 def main() -> int:
     import argparse
+
     parser = argparse.ArgumentParser(description="Download sample or YOTO 5-subject EEG data.")
     parser.add_argument("--yoto-five", action="store_true", help="Download ds005815 for 5 subjects with task-task (and rest1).")
     parser.add_argument("--skip-other", action="store_true", help="When using --yoto-five, skip other datasets (ds004621, Hajonides).")
@@ -248,37 +295,25 @@ def main() -> int:
     downloads: list[dict] = []
 
     if args.yoto_five:
-        subs = openneuro_subject_list("ds005815", max_subjects=5)
         try:
-            out = download_openneuro_yoto_five(subs)
-            downloads.append(out)
+            downloads.append(download_yoto_five())
         except Exception as exc:  # noqa: BLE001
             downloads.append({"dataset": "ds005815", "error": str(exc)})
         if not args.skip_other:
-            for dataset_id in [d for d in configured_openneuro_datasets() if d != "ds005815"]:
-                try:
-                    downloads.append(download_openneuro_subject(dataset_id))
-                except Exception as exc:  # noqa: BLE001
-                    downloads.append({"dataset": dataset_id, "error": str(exc)})
+            other_ids = [d for d in configured_openneuro_datasets() if d != "ds005815"]
+            downloads.extend(download_openneuro_subjects(other_ids))
             try:
                 downloads.append(download_hajonides_subject())
             except Exception as exc:  # noqa: BLE001
                 downloads.append({"dataset": "hajonides_j289e", "error": str(exc)})
     else:
-        for dataset_id in configured_openneuro_datasets():
-            try:
-                downloads.append(download_openneuro_subject(dataset_id))
-            except Exception as exc:  # noqa: BLE001
-                downloads.append({"dataset": dataset_id, "error": str(exc)})
+        downloads.extend(download_openneuro_subjects(configured_openneuro_datasets()))
         try:
             downloads.append(download_hajonides_subject())
         except Exception as exc:  # noqa: BLE001
             downloads.append({"dataset": "hajonides_j289e", "error": str(exc)})
 
-    MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-    manifest = {"downloads": downloads}
-    MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    print(f"Wrote manifest: {MANIFEST}")
+    write_download_manifest(downloads)
     return 0
 
 
