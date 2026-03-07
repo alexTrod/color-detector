@@ -9,7 +9,8 @@ from pathlib import Path
 import mne
 import numpy as np
 import pandas as pd
-import yaml
+
+from yoto_utils import extract_tone_onsets, get_event_mapping, load_config, load_events_tsv
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PREPROC = ROOT / "configs/yoto_preprocessing.yaml"
@@ -19,77 +20,30 @@ AUG_EPOCH_DIR = ROOT / "data/processed/epochs_aug"
 OUT_INDEX = ROOT / "data/manifests/epoch_index_yoto_tones_zuna.csv"
 
 
-def load_config(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    with path.open() as f:
-        return yaml.safe_load(f) or {}
-
-
-def get_event_mapping(config_events: dict) -> dict[int | str, str]:
-    out = {}
-    for k, v in config_events.get("event_value_to_stimulus", {}).items():
-        out[int(k)] = str(v)
-    for k, v in config_events.get("trial_type_to_stimulus", {}).items():
-        out[str(k)] = str(v)
-    return out
-
-
-def load_events_tsv(vhdr_path: Path) -> pd.DataFrame | None:
-    stem = vhdr_path.stem.replace("_eeg", "")
-    tsv = vhdr_path.parent / (stem + "_events.tsv")
-    if not tsv.exists():
-        tsv = vhdr_path.with_suffix(".tsv")
-    if not tsv.exists():
-        return None
-    return pd.read_csv(tsv, sep="\t")
-
-
-def extract_tone_onsets(
-    events_df: pd.DataFrame,
-    event_mapping: dict,
-    onset_col: str = "onset",
-    value_col: str = "value",
-) -> list[tuple[float, str]]:
-    out = []
-    for _, row in events_df.iterrows():
-        stim_id = None
-        if value_col in events_df.columns and pd.notna(row.get(value_col)):
-            try:
-                v = int(float(row[value_col]))
-                stim_id = event_mapping.get(v)
-            except (ValueError, TypeError):
-                pass
-        if stim_id not in ("tone_C", "tone_D", "tone_E"):
-            continue
-        out.append((float(row[onset_col]), stim_id))
-    return out
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--zuna-fif-dir", required=True, help="ZUNA 4_fif_output directory")
-    parser.add_argument("--epoch-index", type=str, default=str(EPOCH_INDEX_YOTO))
-    parser.add_argument("--out-dir", type=str, default=str(AUG_EPOCH_DIR))
-    parser.add_argument("--out-index", type=str, default=str(OUT_INDEX))
-    args = parser.parse_args()
-
-    cfg = load_config(CONFIG_PREPROC)
-    cfg_events = load_config(CONFIG_EVENTS)
+def build_zuna_epoch_index(
+    zuna_fif_dir: str | Path,
+    epoch_index: str | Path = EPOCH_INDEX_YOTO,
+    out_dir: str | Path = AUG_EPOCH_DIR,
+    out_index: str | Path = OUT_INDEX,
+    config_preproc: Path = CONFIG_PREPROC,
+    config_events: Path = CONFIG_EVENTS,
+) -> list[dict]:
+    cfg = load_config(config_preproc)
+    cfg_events = load_config(config_events)
     event_mapping = get_event_mapping(cfg_events)
     epoch_cfg = cfg.get("epoch", {})
     tmin = float(epoch_cfg.get("tmin", -0.2))
     tmax = float(epoch_cfg.get("tmax", 0.8))
 
-    df = pd.read_csv(args.epoch_index)
+    df = pd.read_csv(epoch_index)
     if "source_file" not in df.columns:
         print("Epoch index must have source_file column (long-format).")
-        return 1
+        return []
     unique_sources = df["source_file"].unique()
-    zuna_dir = Path(args.zuna_fif_dir)
-    out_dir = Path(args.out_dir)
+    zuna_dir = Path(zuna_fif_dir)
+    out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    index_rows = []
+    index_rows: list[dict] = []
 
     for source_file in unique_sources:
         vhdr = Path(source_file)
@@ -143,12 +97,29 @@ def main() -> int:
                 "pipeline_source": "zuna",
             })
 
-    out_index_path = Path(args.out_index)
+    out_index_path = Path(out_index)
     out_index_path.parent.mkdir(parents=True, exist_ok=True)
     if index_rows:
         pd.DataFrame(index_rows).to_csv(out_index_path, index=False)
         out_index_path.with_suffix(".json").write_text(json.dumps(index_rows, indent=2), encoding="utf-8")
         print(f"Wrote {len(index_rows)} rows to {out_index_path}")
+    return index_rows
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--zuna-fif-dir", required=True, help="ZUNA 4_fif_output directory")
+    parser.add_argument("--epoch-index", type=str, default=str(EPOCH_INDEX_YOTO))
+    parser.add_argument("--out-dir", type=str, default=str(AUG_EPOCH_DIR))
+    parser.add_argument("--out-index", type=str, default=str(OUT_INDEX))
+    args = parser.parse_args()
+
+    build_zuna_epoch_index(
+        zuna_fif_dir=args.zuna_fif_dir,
+        epoch_index=args.epoch_index,
+        out_dir=args.out_dir,
+        out_index=args.out_index,
+    )
     return 0
 
 

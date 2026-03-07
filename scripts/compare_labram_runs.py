@@ -17,16 +17,17 @@ DEFAULT_RUNS = {
 }
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--runs-dir", type=str, default=str(RUNS_DIR))
-    parser.add_argument("--names", type=str, nargs="+", default=list(DEFAULT_RUNS.keys()))
-    parser.add_argument("--files", type=str, nargs="+", default=list(DEFAULT_RUNS.values()))
-    parser.add_argument("--plot", action="store_true", help="Show bar chart (requires matplotlib)")
-    args = parser.parse_args()
-    runs_dir = Path(args.runs_dir)
+def compare_labram_runs(
+    runs_dir: str | Path = RUNS_DIR,
+    names: list[str] | None = None,
+    files: list[str] | None = None,
+    plot: bool = False,
+) -> list[dict]:
+    runs_dir = Path(runs_dir)
+    names = names or list(DEFAULT_RUNS.keys())
+    files = files or list(DEFAULT_RUNS.values())
     rows = []
-    for name, fname in zip(args.names, args.files):
+    for name, fname in zip(names, files):
         path = runs_dir / fname
         if not path.exists():
             rows.append({"pipeline": name, "accuracy": None, "n_train": None, "n_test": None})
@@ -43,7 +44,7 @@ def main() -> int:
     for r in rows:
         acc = f"{r['accuracy']:.4f}" if r.get("accuracy") is not None else "N/A"
         print(f"{r['pipeline']}\t{acc}\t{r.get('n_train', '')}\t{r.get('n_test', '')}")
-    if args.plot and rows:
+    if plot and rows:
         try:
             import matplotlib.pyplot as plt
             names = [r["pipeline"] for r in rows]
@@ -56,6 +57,22 @@ def main() -> int:
             print(f"Saved {runs_dir / 'labram_comparison.png'}")
         except ImportError:
             print("matplotlib not available; skip --plot")
+    return rows
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--runs-dir", type=str, default=str(RUNS_DIR))
+    parser.add_argument("--names", type=str, nargs="+", default=list(DEFAULT_RUNS.keys()))
+    parser.add_argument("--files", type=str, nargs="+", default=list(DEFAULT_RUNS.values()))
+    parser.add_argument("--plot", action="store_true", help="Show bar chart (requires matplotlib)")
+    args = parser.parse_args()
+    compare_labram_runs(
+        runs_dir=args.runs_dir,
+        names=args.names,
+        files=args.files,
+        plot=args.plot,
+    )
     return 0
 
 
