@@ -67,12 +67,20 @@ def build_manifest() -> list[dict]:
     return rows
 
 
+def write_manifest(
+    rows: list[dict],
+    out_json: Path = OUT_JSON,
+    out_csv: Path = OUT_CSV,
+) -> None:
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    pd.DataFrame(rows).to_csv(out_csv, index=False)
+    print(f"Wrote {len(rows)} records to {out_json} and {out_csv}")
+
+
 def main() -> int:
     rows = build_manifest()
-    OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
-    OUT_JSON.write_text(json.dumps(rows, indent=2), encoding="utf-8")
-    pd.DataFrame(rows).to_csv(OUT_CSV, index=False)
-    print(f"Wrote {len(rows)} records to {OUT_JSON} and {OUT_CSV}")
+    write_manifest(rows, OUT_JSON, OUT_CSV)
     return 0
 
 

@@ -95,23 +95,21 @@ def _load_data_per_recording(df: pd.DataFrame):
     return X, y, g
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--device", type=str, default="cpu")
-    parser.add_argument("--checkpoint", type=str, default="", help="Path to pretrained LaBraM checkpoint (.pth)")
-    parser.add_argument("--epoch-index", type=str, default=str(EPOCH_INDEX))
-    parser.add_argument("--out-metrics", type=str, default=str(OUT_METRICS))
-    args = parser.parse_args()
-    epoch_index_path = Path(args.epoch_index)
-    out_metrics_path = Path(args.out_metrics)
+def train_labram(
+    epochs: int = 10,
+    batch_size: int = 32,
+    lr: float = 1e-4,
+    device: str = "cpu",
+    checkpoint: str = "",
+    epoch_index: str | Path = EPOCH_INDEX,
+    out_metrics: str | Path | None = OUT_METRICS,
+) -> dict:
+    epoch_index_path = Path(epoch_index)
+    out_metrics_path = Path(out_metrics) if out_metrics else None
 
     X, y, groups = load_data(epoch_index_path)
     if len(y) < 2:
-        print(f"Not enough samples ({len(y)}); need at least 2.")
-        return 1
+        raise ValueError(f"Not enough samples ({len(y)}); need at least 2.")
     le = LabelEncoder()
     y_enc = le.fit_transform(y)
 
@@ -125,31 +123,31 @@ def main() -> int:
 
     train_ds = EpochDataset(X[train_idx], y_enc[train_idx])
     test_ds = EpochDataset(X[test_idx], y_enc[test_idx])
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
-    test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
     model = labram_base_patch200_200(
         num_classes=len(le.classes_),
         EEG_size=1200,
         init_values=0.1,
-    ).to(args.device)
+    ).to(device)
     input_chans = [0, 1]  # cls + FP1 placeholder index
 
-    if args.checkpoint:
-        ckpt = torch.load(args.checkpoint, map_location="cpu")
+    if checkpoint:
+        ckpt = torch.load(checkpoint, map_location="cpu")
         state = ckpt.get("model", ckpt)
         current = model.state_dict()
         filtered = {k: v for k, v in state.items() if k in current and v.shape == current[k].shape}
         missing, unexpected = model.load_state_dict(filtered, strict=False)
         print(f"Loaded checkpoint weights: matched={len(filtered)} missing={len(missing)} unexpected={len(unexpected)}")
 
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr)
     loss_fn = torch.nn.CrossEntropyLoss()
 
     model.train()
-    for _ in range(args.epochs):
+    for _ in range(epochs):
         for xb, yb in train_loader:
-            xb, yb = xb.to(args.device), yb.to(args.device)
+            xb, yb = xb.to(device), yb.to(device)
             opt.zero_grad()
             loss = loss_fn(model(xb, input_chans=input_chans), yb)
             loss.backward()
@@ -159,7 +157,7 @@ def main() -> int:
     correct, total = 0, 0
     with torch.no_grad():
         for xb, yb in test_loader:
-            xb, yb = xb.to(args.device), yb.to(args.device)
+            xb, yb = xb.to(device), yb.to(device)
             pred = model(xb, input_chans=input_chans).argmax(dim=1)
             correct += (pred == yb).sum().item()
             total += len(yb)
@@ -170,13 +168,41 @@ def main() -> int:
         "n_test": int(len(test_idx)),
         "label_classes": list(le.classes_),
         "model": "labram_base_patch200_200",
-        "checkpoint": args.checkpoint or None,
+        "checkpoint": checkpoint or None,
         "input_shape": [int(X.shape[1]), int(X.shape[2]), int(X.shape[3])],
         "note": "Uses official LaBraM architecture. For best quality, pass a pretrained checkpoint and dataset-specific channel mapping.",
     }
-    out_metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    out_metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    print(f"Saved Labram metrics to {out_metrics_path}")
+    if out_metrics_path:
+        out_metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        out_metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+        print(f"Saved Labram metrics to {out_metrics_path}")
+    return metrics
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--checkpoint", type=str, default="", help="Path to pretrained LaBraM checkpoint (.pth)")
+    parser.add_argument("--epoch-index", type=str, default=str(EPOCH_INDEX))
+    parser.add_argument("--out-metrics", type=str, default=str(OUT_METRICS))
+    args = parser.parse_args()
+
+    try:
+        train_labram(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            device=args.device,
+            checkpoint=args.checkpoint,
+            epoch_index=args.epoch_index,
+            out_metrics=args.out_metrics,
+        )
+    except ValueError as exc:
+        print(str(exc))
+        return 1
     return 0
 
 

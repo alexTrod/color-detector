@@ -150,6 +150,55 @@ def download_openneuro_subject(
     }
 
 
+def download_openneuro_subjects(
+    dataset_ids: list[str] | None = None,
+    task_glob: str | None = None,
+    max_subjects: int | None = None,
+    include_hajonides: bool = True,
+    ignore_errors: bool = True,
+) -> list[dict]:
+    if dataset_ids is None:
+        dataset_ids = configured_openneuro_datasets()
+    downloads: list[dict] = []
+    for dataset_id in dataset_ids:
+        try:
+            subs = None
+            if max_subjects is not None:
+                subs = openneuro_subject_list(dataset_id, max_subjects=max_subjects)
+            downloads.append(download_openneuro_subject(dataset_id, subjects=subs, task_glob=task_glob))
+        except Exception as exc:  # noqa: BLE001
+            if not ignore_errors:
+                raise
+            downloads.append({"dataset": dataset_id, "error": str(exc)})
+    if include_hajonides:
+        try:
+            downloads.append(download_hajonides_subject())
+        except Exception as exc:  # noqa: BLE001
+            if not ignore_errors:
+                raise
+            downloads.append({"dataset": "hajonides_j289e", "error": str(exc)})
+    return downloads
+
+
+def download_yoto_five(
+    max_subjects: int = 5,
+    skip_other: bool = False,
+    ignore_errors: bool = True,
+) -> list[dict]:
+    downloads: list[dict] = []
+    subs = openneuro_subject_list("ds005815", max_subjects=max_subjects)
+    try:
+        downloads.append(download_openneuro_yoto_five(subs))
+    except Exception as exc:  # noqa: BLE001
+        if not ignore_errors:
+            raise
+        downloads.append({"dataset": "ds005815", "error": str(exc)})
+    if not skip_other:
+        other_ids = [d for d in configured_openneuro_datasets() if d != "ds005815"]
+        downloads.extend(download_openneuro_subjects(dataset_ids=other_ids, ignore_errors=ignore_errors))
+    return downloads
+
+
 def parse_osf_info(url: str) -> tuple[str, str | None]:
     parsed = urlparse(url)
     parts = [p for p in parsed.path.split("/") if p]
@@ -248,32 +297,9 @@ def main() -> int:
     downloads: list[dict] = []
 
     if args.yoto_five:
-        subs = openneuro_subject_list("ds005815", max_subjects=5)
-        try:
-            out = download_openneuro_yoto_five(subs)
-            downloads.append(out)
-        except Exception as exc:  # noqa: BLE001
-            downloads.append({"dataset": "ds005815", "error": str(exc)})
-        if not args.skip_other:
-            for dataset_id in [d for d in configured_openneuro_datasets() if d != "ds005815"]:
-                try:
-                    downloads.append(download_openneuro_subject(dataset_id))
-                except Exception as exc:  # noqa: BLE001
-                    downloads.append({"dataset": dataset_id, "error": str(exc)})
-            try:
-                downloads.append(download_hajonides_subject())
-            except Exception as exc:  # noqa: BLE001
-                downloads.append({"dataset": "hajonides_j289e", "error": str(exc)})
+        downloads.extend(download_yoto_five(skip_other=args.skip_other))
     else:
-        for dataset_id in configured_openneuro_datasets():
-            try:
-                downloads.append(download_openneuro_subject(dataset_id))
-            except Exception as exc:  # noqa: BLE001
-                downloads.append({"dataset": dataset_id, "error": str(exc)})
-        try:
-            downloads.append(download_hajonides_subject())
-        except Exception as exc:  # noqa: BLE001
-            downloads.append({"dataset": "hajonides_j289e", "error": str(exc)})
+        downloads.extend(download_openneuro_subjects())
 
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     manifest = {"downloads": downloads}
