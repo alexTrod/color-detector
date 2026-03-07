@@ -62,7 +62,8 @@ def load_data(epoch_index_path: Path):
 def _load_data_long_format(df: pd.DataFrame):
     X_list, y_list, g_list = [], [], []
     for epochs_file, grp in df.groupby("epochs_file"):
-        arr = np.load(epochs_file)
+        epochs_path = ROOT / epochs_file if not Path(epochs_file).is_absolute() else Path(epochs_file)
+        arr = np.load(epochs_path)
         for row in grp.itertuples(index=False):
             epoch_idx = int(getattr(row, "epoch_idx", 0))
             stim_id = getattr(row, "stimulus_id", None)
@@ -84,7 +85,8 @@ def _load_data_long_format(df: pd.DataFrame):
 def _load_data_per_recording(df: pd.DataFrame):
     X_all, y_all, g_all = [], [], []
     for row in df.itertuples(index=False):
-        epochs = np.load(row.epochs_file)
+        epochs_path = ROOT / row.epochs_file if not Path(row.epochs_file).is_absolute() else Path(row.epochs_file)
+        epochs = np.load(epochs_path)
         epochs = prepare_for_labram(epochs)
         X_all.append(epochs)
         y_all.extend([row.modality] * len(epochs))
@@ -113,6 +115,16 @@ def train_labram(
     y_enc = le.fit_transform(y)
 
     n_samples = len(y_enc)
+    print("Training on {n_samples} samples")
+    print("Groups: {groups}")
+    print("n_samples < 10 or len(set(groups)) < 2: {n_samples < 10 or len(set(groups)) < 2}")
+    print("ShuffleSplit: {ShuffleSplit(n_splits=1, test_size=0.3, random_state=42)}")
+    print("GroupShuffleSplit: {GroupShuffleSplit(n_splits=1, test_size=0.3, random_state=42)}")
+    print("train_idx: {train_idx}")
+    print("test_idx: {test_idx}")
+    print("train_ds: {train_ds}")
+    print("test_ds: {test_ds}")
+    print("train_loader: {train_loader}")
     if n_samples < 10 or len(set(groups)) < 2:
         split = ShuffleSplit(n_splits=1, test_size=0.3, random_state=42)
         train_idx, test_idx = next(split.split(X, y_enc))
@@ -131,7 +143,7 @@ def train_labram(
         init_values=0.1,
     ).to(device)
     input_chans = [0, 1]  # cls + FP1 placeholder index
-
+    
     if checkpoint:
         ckpt = torch.load(checkpoint, map_location="cpu")
         state = ckpt.get("model", ckpt)

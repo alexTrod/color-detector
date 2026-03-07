@@ -18,8 +18,10 @@ def load_config(path: Path) -> dict:
 def get_event_mapping(config_events: dict) -> dict[int | str, str]:
     mapping: dict[int | str, str] = {}
     for k, v in config_events.get("event_value_to_stimulus", {}).items():
+        print('using event value to stimulus mapping')
         mapping[int(k)] = str(v)
     for k, v in config_events.get("trial_type_to_stimulus", {}).items():
+        print('using trial type to stimulus mapping')
         mapping[str(k)] = str(v)
     return mapping
 

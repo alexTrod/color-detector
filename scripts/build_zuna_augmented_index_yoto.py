@@ -44,7 +44,7 @@ def build_zuna_epoch_index(
     index_rows = []
 
     for source_file in unique_sources:
-        vhdr = Path(source_file)
+        vhdr = ROOT / source_file if not Path(source_file).is_absolute() else Path(source_file)
         if not vhdr.exists():
             continue
         events_df = load_events_tsv(vhdr)
