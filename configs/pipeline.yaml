@@ -1,0 +1,54 @@
+project:
+  name: eeg-color-sound-labram
+  random_seed: 42
+
+data:
+  registry_csv: eeg_datasets_for_labram.csv
+  raw_root: data/raw_samples
+  processed_root: data/processed
+  manifests_root: data/manifests
+
+preprocessing:
+  target_sfreq: 256
+  highpass_hz: 0.5
+  lowpass_hz: 45.0
+  notch_hz: [50.0, 60.0]
+  epoch_seconds: 5.0
+  epoch_overlap_seconds: 0.0
+  rereference: average
+
+labels:
+  modality_labels: ["visual", "auditory", "audiovisual"]
+  color_labels: ["red", "green", "blue", "hue_bin"]
+  sound_labels: ["tone_C", "tone_D", "tone_E", "standard", "target", "distractor"]
+
+training:
+  split:
+    train: 0.7
+    val: 0.15
+    test: 0.15
+    group_by: subject
+  baseline:
+    model: logistic_regression
+    max_iter: 500
+  labram:
+    checkpoint: null
+    freeze_backbone_epochs: 5
+    finetune_epochs: 20
+    batch_size: 32
+    learning_rate: 0.0001
+
+augmentation:
+  zuna:
+    enabled: true
+    target_channels:
+      - AF3
+      - AF4
+      - F1
+      - F2
+      - C3
+      - C4
+      - P3
+      - P4
+    diffusion_sample_steps: 50
+    diffusion_cfg: 1.0

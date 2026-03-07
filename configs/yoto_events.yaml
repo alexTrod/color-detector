@@ -1,0 +1,25 @@
+# ds005815 YOTO: map event value (BIDS events.tsv "value" or vmrk code) -> stimulus_id
+# TrialProc events have integer value 21-47 (27 conditions). Map tone conditions only.
+# Adjust these from dataset documentation or by inspecting unique trial_type+value for auditory tones.
+# C: 261.63 Hz, D: 293.66 Hz, E: 329.63 Hz
+
+dataset_id: ds005815
+
+# event_value (int) -> stimulus_id for auditory tones only
+# Example: if value 21=C, 22=D, 23=E in the dataset, use:
+event_value_to_stimulus:
+  21: tone_C
+  22: tone_D
+  23: tone_E
+
+# Optional: if events use trial_type string instead of value, map trial_type -> stimulus_id
+trial_type_to_stimulus: {}
+
+# Stimuli metadata (for display)
+stimuli:
+  tone_C:
+    frequency_hz: 261.63
+  tone_D:
+    frequency_hz: 293.66
+  tone_E:
+    frequency_hz: 329.63

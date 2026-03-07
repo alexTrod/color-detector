@@ -1,0 +1,14 @@
+numpy
+pandas
+scipy
+mne
+scikit-learn
+pyyaml
+torch
+timm
+einops
+requests
+openneuro-py
+zuna
+streamlit
+plotly

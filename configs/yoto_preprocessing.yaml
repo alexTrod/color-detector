@@ -1,0 +1,28 @@
+# YOTO paper preprocessing (EEGLAB-style): FIR, ASR, ICA, ICLabel
+# Ref: YOTO dataset paper preprocessing section
+
+preprocessing:
+  # Causal FIR bandpass, 30 s buffer
+  bandpass_hz: [1, 50]
+  fir_order: 500
+  filter_buffer_seconds: 30
+  filter_phase: "minimum"  # causal
+
+  resample_hz: 250
+
+  # ASR (artifact subspace reconstruction), threshold from paper ref 33
+  asr_enabled: true
+  asr_threshold: 20  # k in CLEANRAW/ASR; tune per dataset
+
+  # ICA + ICLabel
+  ica_enabled: true
+  iclabel_reject_threshold: 0.8  # reject if artifact prob > this
+  ica_max_pca_components: null   # null = use n_channels - 1
+
+  rereference: average  # after ICA
+
+# Event-based epoching for tones
+epoch:
+  tmin: -0.2
+  tmax: 0.8
+  baseline: null  # no baseline correction in epoch; or (None, 0)
