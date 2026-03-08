@@ -11,7 +11,7 @@ import mne
 import numpy as np
 import pandas as pd
 
-from yoto_utils import get_event_mapping, load_config, load_events_tsv
+from scripts.yoto_utils import get_event_mapping, load_config, load_events_tsv
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PREPROC = ROOT / "configs/yoto_preprocessing.yaml"
@@ -131,6 +131,7 @@ def events_to_epochs(
     onset_col: str = "onset",
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Return (epochs array [N,C,T], event_indices, stimulus_ids)."""
+
     data = raw.get_data()
     sfreq = raw.info["sfreq"]
     n_samp_pre = int(round(-tmin * sfreq))
@@ -139,6 +140,8 @@ def events_to_epochs(
     n_ch = data.shape[0]
     stimulus_ids = []
     valid_starts = []
+    # Ensure chronological order - TSV files may not be sorted by onset
+    events_df = events_df.sort_values(by=onset_col).reset_index(drop=True)
     for _, row in events_df.iterrows():
         stim_id = None
         if stim_col in events_df.columns and pd.notna(row.get(stim_col)):
@@ -148,12 +151,16 @@ def events_to_epochs(
             except (ValueError, TypeError):
                 pass
         if stim_id is None and trial_type_col in events_df.columns:
-            stim_id = event_mapping.get(str(row[trial_type_col]).strip())
+            #stim_id = event_mapping.get(str(row[trial_type_col]).strip())
+            continue
         if stim_id not in ("tone_C", "tone_D", "tone_E"):
             continue
         onset_samp = int(round(float(row[onset_col]) * sfreq))
         start = onset_samp - n_samp_pre
         end = onset_samp + n_samp_post
+
+        #print(f"valid stimulus {stim_id} starts at {start} samples and ends at {end} samples in data.shape: {data.shape}")
+        #print(f"onset at {row[onset_col]}")
         if start < 0 or end > data.shape[1]:
             continue
         stimulus_ids.append(stim_id)
@@ -163,6 +170,8 @@ def events_to_epochs(
     epochs = np.zeros((len(valid_starts), n_ch, n_samp), dtype=np.float32)
     for i, start in enumerate(valid_starts):
         epochs[i] = data[:, start : start + n_samp]
+   # print(f"epochs: {epochs.shape}, valid_starts: {valid_starts}, stimulus_ids: {stimulus_ids}")
+    #print(f"the subject had a total of {len(valid_starts)} valid stimuli + {len(events_df) - len(valid_starts)} invalid stimuli ")
     return epochs, np.array(valid_starts), stimulus_ids
 
 
@@ -178,12 +187,14 @@ def run_preprocess_yoto(
     config_events_path: Path = CONFIG_EVENTS,
     raw_root: Path = RAW_ROOT,
 ) -> dict[str, Any]:
+
     cfg_preproc = _resolve_preproc_config(config_preproc_path, skip_asr, skip_ica)
     cfg_events = load_config(config_events_path)
     event_mapping = get_event_mapping(cfg_events)
+    print(f"event_mapping: {event_mapping}")
     if not event_mapping:
         print("Warning: no event_value_to_stimulus in yoto_events.yaml; no tone epochs will be produced.")
-
+    print(f"cfg_events: {cfg_events}")
     epoch_cfg = cfg_preproc.get("epoch", {})
     tmin = float(epoch_cfg.get("tmin", -0.2))
     tmax = float(epoch_cfg.get("tmax", 0.8))
@@ -217,6 +228,7 @@ def run_preprocess_yoto(
             continue
         parts = vhdr.parts
         subject_id = next((p for p in parts if p.startswith("sub-")), "unknown")
+        print(f"subject_id: {subject_id}")
         stem = f"{dataset_id}__{subject_id}__{vhdr.stem}"
         out_path = out_dir / f"{stem}.npy"
         np.save(out_path, epochs)
@@ -231,6 +243,7 @@ def run_preprocess_yoto(
                 "n_channels": int(epochs.shape[1]),
                 "n_samples": int(epochs.shape[2]),
             })
+        print(f"index_rows: {index_rows}")
 
     out_index.parent.mkdir(parents=True, exist_ok=True)
     if index_rows:
@@ -240,6 +253,7 @@ def run_preprocess_yoto(
         )
         print(f"Saved {len(index_rows)} epoch rows to {out_index}")
     else:
+
         print("No tone epochs produced; check event mapping and task files.")
     return {
         "dataset_id": dataset_id,

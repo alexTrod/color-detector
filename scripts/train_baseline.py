@@ -39,7 +39,8 @@ def main() -> int:
     df = pd.read_csv(args.epoch_index)
     X_all, y_all, g_all = [], [], []
     for row in df.itertuples(index=False):
-        epochs = np.load(row.epochs_file)
+        epochs_path = ROOT / row.epochs_file if not Path(row.epochs_file).is_absolute() else Path(row.epochs_file)
+        epochs = np.load(epochs_path)
         X = featurize(epochs)
         X_all.append(X)
         y_all.extend([row.modality] * X.shape[0])

@@ -1,3 +1,7 @@
+The goal of this project is to build a classifier able to classify EEG data of people attending to color or pitch stimuli. The data come from various datasets. 
+
+
+
 # EEG Color-Sound Pipeline
 
 This project builds a reproducible EEG pipeline for:
@@ -41,3 +45,4 @@ python3 scripts/run_zuna_augmentation.py \
 - `docs/training_playbook.md`
 - `docs/augmentation_zuna.md`
 - `docs/quickstart_3_subject_smoke_test.md`
+

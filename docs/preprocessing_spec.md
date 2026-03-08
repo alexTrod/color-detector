@@ -16,3 +16,4 @@ Pipeline implementation: `scripts/preprocess_eeg.py`
 - This aligns with ZUNA expectations (`256 Hz`, `5s` windows) from the official package docs and paper.
 - `.mat` files are listed in the manifest but not parsed by current preprocessing script; add dataset-specific loaders when needed.
 - Subject-wise splitting is performed downstream to avoid leakage.
+

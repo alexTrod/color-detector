@@ -12,3 +12,4 @@ openneuro-py
 zuna
 streamlit
 plotly
+seaborn

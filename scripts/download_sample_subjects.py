@@ -4,21 +4,48 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import openneuro
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 ROOT = Path(__file__).resolve().parents[1]
 RAW_ROOT = ROOT / "data/raw_samples"
 MANIFEST = ROOT / "data/manifests/sample_download_manifest.json"
 REGISTRY_CSV = ROOT / "eeg_datasets_for_labram.csv"
 OPENNEURO_GRAPHQL = "https://openneuro.org/crn/graphql"
+DEFAULT_USB_ROOT = Path("/Volumes/DISK_IMG")
+KNOWN_YOTO_SUBJECTS = [
+    "sub-01", "sub-02", "sub-05", "sub-07", "sub-08",
+    "sub-09", "sub-10", "sub-11", "sub-12", "sub-13",
+    "sub-14", "sub-16", "sub-18", "sub-19", "sub-21",
+    "sub-22", "sub-23", "sub-24", "sub-25", "sub-26",
+]
 
 
-def openneuro_first_subject(dataset_id: str) -> str:
+def _requests_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=1.0,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"GET", "POST"}),
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.headers.update({"Connection": "close"})
+    return session
+
+
+def _openneuro_graphql_files(dataset_id: str) -> list[dict]:
     query = """
     query($id: ID!) {
       dataset(id: $id) {
@@ -31,13 +58,39 @@ def openneuro_first_subject(dataset_id: str) -> str:
       }
     }
     """
-    r = requests.post(OPENNEURO_GRAPHQL, json={"query": query, "variables": {"id": dataset_id}}, timeout=30)
-    r.raise_for_status()
-    files = r.json()["data"]["dataset"]["latestSnapshot"]["files"]
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            with _requests_session() as session:
+                r = session.post(
+                    OPENNEURO_GRAPHQL,
+                    json={"query": query, "variables": {"id": dataset_id}},
+                    timeout=30,
+                )
+            r.raise_for_status()
+            files = r.json()["data"]["dataset"]["latestSnapshot"]["files"]
+            return files
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if attempt < 3:
+                time.sleep(attempt)
+    raise RuntimeError(f"OpenNeuro GraphQL lookup failed for {dataset_id}: {last_error}") from last_error
+
+
+def openneuro_first_subject(dataset_id: str) -> str:
+    files = _openneuro_graphql_files(dataset_id)
     subs = sorted([f["filename"] for f in files if f.get("directory") and f["filename"].startswith("sub-")])
     if not subs:
         raise RuntimeError(f"No subject folders found in {dataset_id}")
     return subs[0]
+
+
+def yoto_subjects() -> list[str]:
+    try:
+        return openneuro_subject_list("ds005815", max_subjects=None)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Falling back to built-in YOTO subject list: {exc}")
+        return KNOWN_YOTO_SUBJECTS.copy()
 
 
 def parse_openneuro_id(url: str) -> str | None:
@@ -59,14 +112,23 @@ def configured_openneuro_datasets() -> list[str]:
     return sorted(set(ids))
 
 
-def download_openneuro_yoto_five(subjects: list[str], raw_root: Path = RAW_ROOT) -> dict:
-    """Download ds005815 for given subjects, task-task and rest1 EEG."""
+def build_yoto_task_include(subjects: list[str] | None = None) -> list[str]:
+    include = [
+        "dataset_description.json",
+        "CHANGES",
+    ]
+    subject_patterns = subjects if subjects is not None else ["sub-*"]
+    for sub in subject_patterns:
+        include.append(f"{sub}/**/eeg/*task-task*")
+        include.append(f"derivatives/**/{sub}/**/*task-task*")
+    return include
+
+
+def download_openneuro_yoto_subjects(subjects: list[str] | None, raw_root: Path = RAW_ROOT) -> dict:
+    """Download ds005815 task-task raw EEG plus matching derivatives for given subjects."""
     target = raw_root / "ds005815"
     target.mkdir(parents=True, exist_ok=True)
-    include = ["dataset_description.json", "CHANGES", "README"] # removed  "participants.tsv", "participants.json"
-    for sub in subjects:
-        include.append(f"{sub}/**/eeg/*task-task*")
-        include.append(f"{sub}/**/eeg/*rest1*")
+    include = build_yoto_task_include(subjects)
     openneuro.download(
         dataset="ds005815",
         target_dir=target,
@@ -79,6 +141,7 @@ def download_openneuro_yoto_five(subjects: list[str], raw_root: Path = RAW_ROOT)
     return {
         "dataset": "ds005815",
         "subjects": subjects,
+        "include": include,
         "target_dir": str(target),
         "files_downloaded": len(files),
         "bytes": total,
@@ -87,21 +150,7 @@ def download_openneuro_yoto_five(subjects: list[str], raw_root: Path = RAW_ROOT)
 
 def openneuro_subject_list(dataset_id: str, max_subjects: int | None = None) -> list[str]:
     """Return list of subject folder names (sub-01, sub-02, ...) for dataset."""
-    query = """
-    query($id: ID!) {
-      dataset(id: $id) {
-        latestSnapshot {
-          files {
-            filename
-            directory
-          }
-        }
-      }
-    }
-    """
-    r = requests.post(OPENNEURO_GRAPHQL, json={"query": query, "variables": {"id": dataset_id}}, timeout=30)
-    r.raise_for_status()
-    files = r.json()["data"]["dataset"]["latestSnapshot"]["files"]
+    files = _openneuro_graphql_files(dataset_id)
     subs = sorted([f["filename"] for f in files if f.get("directory") and f["filename"].startswith("sub-")])
     if max_subjects is not None:
         subs = subs[:max_subjects]
@@ -130,7 +179,7 @@ def download_openneuro_subject(
         run_glob = task_glob
     include = ["dataset_description.json", "CHANGES", "README", ".tsv"] # removed participants.tsv and participants.json
     for sub in subjects:
-        include.append(f"{sub}/**/eeg/{run_glob}")
+        include.append(f"{sub}/**/eeg/*task-task*")
     openneuro.download(
         dataset=dataset_id,
         target_dir=target,
@@ -253,8 +302,31 @@ def download_yoto_five(
     max_subjects: int = 5,
     raw_root: Path = RAW_ROOT,
 ) -> dict:
-    subs = openneuro_subject_list("ds005815", max_subjects=max_subjects)
-    return download_openneuro_yoto_five(subs, raw_root=raw_root)
+    subs = yoto_subjects()[:max_subjects]
+    return download_openneuro_yoto_subjects(subs, raw_root=raw_root)
+
+
+def download_yoto_all(
+    raw_root: Path = RAW_ROOT,
+) -> dict:
+    return download_openneuro_yoto_subjects(None, raw_root=raw_root)
+
+
+def download_yoto_batch(
+    batch_size: int = 5,
+    batch_index: int = 0,
+    raw_root: Path = RAW_ROOT,
+) -> dict:
+    subjects = yoto_subjects()
+    start = batch_index * batch_size
+    end = start + batch_size
+    batch_subjects = subjects[start:end]
+    if not batch_subjects:
+        raise RuntimeError(
+            f"No YOTO subjects found for batch_index={batch_index} with batch_size={batch_size}. "
+            f"Available subjects: {len(subjects)}"
+        )
+    return download_openneuro_yoto_subjects(batch_subjects, raw_root=raw_root)
 
 
 def download_openneuro_subjects(
@@ -286,30 +358,52 @@ def download_openneuro_subjects(
 def main() -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Download sample or YOTO 5-subject EEG data.")
-    parser.add_argument("--yoto-five", action="store_true", help="Download ds005815 for 5 subjects with task-task (and rest1).")
+    parser = argparse.ArgumentParser(description="Download sample or YOTO EEG data.")
+    parser.add_argument("--yoto-five", action="store_true", help="Download ds005815 for 5 subjects with task-task files only.")
+    parser.add_argument("--yoto-all", action="store_true", help="Download ds005815 for all available subjects with task-task files only.")
+    parser.add_argument("--yoto-batch", action="store_true", help="Download one YOTO batch of subjects.")
+    parser.add_argument("--yoto-batch-size", type=int, default=5, help="Number of YOTO subjects per batch.")
+    parser.add_argument("--yoto-batch-index", type=int, default=0, help="Zero-based YOTO batch index.")
     parser.add_argument("--skip-other", action="store_true", help="When using --yoto-five, skip other datasets (ds004621, Hajonides).")
+    parser.add_argument(
+        "--raw-root",
+        type=Path,
+        default=RAW_ROOT,
+        help=f"Root directory for downloads, e.g. {DEFAULT_USB_ROOT}",
+    )
     args = parser.parse_args()
 
-    RAW_ROOT.mkdir(parents=True, exist_ok=True)
+    raw_root = args.raw_root.expanduser()
+    raw_root.mkdir(parents=True, exist_ok=True)
     downloads: list[dict] = []
 
-    if args.yoto_five:
+    if args.yoto_five or args.yoto_all or args.yoto_batch:
         try:
-            downloads.append(download_yoto_five())
+            if args.yoto_batch:
+                downloads.append(
+                    download_yoto_batch(
+                        batch_size=args.yoto_batch_size,
+                        batch_index=args.yoto_batch_index,
+                        raw_root=raw_root,
+                    )
+                )
+            elif args.yoto_all:
+                downloads.append(download_yoto_all(raw_root=raw_root))
+            else:
+                downloads.append(download_yoto_five(raw_root=raw_root))
         except Exception as exc:  # noqa: BLE001
             downloads.append({"dataset": "ds005815", "error": str(exc)})
         if not args.skip_other:
             other_ids = [d for d in configured_openneuro_datasets() if d != "ds005815"]
-            downloads.extend(download_openneuro_subjects(other_ids))
+            downloads.extend(download_openneuro_subjects(other_ids, raw_root=raw_root))
             try:
-                downloads.append(download_hajonides_subject())
+                downloads.append(download_hajonides_subject(raw_root=raw_root))
             except Exception as exc:  # noqa: BLE001
                 downloads.append({"dataset": "hajonides_j289e", "error": str(exc)})
     else:
-        downloads.extend(download_openneuro_subjects(configured_openneuro_datasets()))
+        downloads.extend(download_openneuro_subjects(configured_openneuro_datasets(), raw_root=raw_root))
         try:
-            downloads.append(download_hajonides_subject())
+            downloads.append(download_hajonides_subject(raw_root=raw_root))
         except Exception as exc:  # noqa: BLE001
             downloads.append({"dataset": "hajonides_j289e", "error": str(exc)})
 
