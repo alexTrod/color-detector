@@ -12,6 +12,13 @@ event_value_to_stimulus:
   28: tone_D
   29: tone_E
 
+# Use derivative task_event.mat when available; otherwise shift raw events.tsv onsets.
+prefer_derivatives_task_event: true
+auto_estimate_onset_offset_from_derivatives: true
+onset_offset_seconds: 0.0
+derivative_onset_offset_seconds: 0.0
+normalize_onsets_to_recording: true
+
 # 
 trial_type_to_stimulus: {}
 

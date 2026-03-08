@@ -116,11 +116,11 @@ def build_yoto_task_include(subjects: list[str] | None = None) -> list[str]:
     include = [
         "dataset_description.json",
         "CHANGES",
+        "derivatives/**/task_event.mat",
     ]
     subject_patterns = subjects if subjects is not None else ["sub-*"]
     for sub in subject_patterns:
         include.append(f"{sub}/**/eeg/*task-task*")
-        include.append(f"derivatives/**/{sub}/**/*task-task*")
     return include
 
 

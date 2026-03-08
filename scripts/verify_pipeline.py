@@ -30,8 +30,18 @@ _ROOT = Path(__file__).resolve().parents[1]
 load_events_tsv = None
 load_yoto_config = None
 get_event_mapping = None
+extract_tone_onsets = None
+load_derivative_tone_onsets = None
+estimate_onset_shift_seconds = None
 try:
-    from scripts.yoto_utils import load_events_tsv, load_config as load_yoto_config, get_event_mapping  # type: ignore
+    from scripts.yoto_utils import (  # type: ignore
+        estimate_onset_shift_seconds,
+        extract_tone_onsets,
+        get_event_mapping,
+        load_config as load_yoto_config,
+        load_derivative_tone_onsets,
+        load_events_tsv,
+    )
 except Exception:
     yoto_path = _ROOT / "scripts" / "yoto_utils.py"
     if yoto_path.exists():
@@ -42,6 +52,9 @@ except Exception:
             load_events_tsv = getattr(module, "load_events_tsv", None)
             load_yoto_config = getattr(module, "load_config", None)
             get_event_mapping = getattr(module, "get_event_mapping", None)
+            extract_tone_onsets = getattr(module, "extract_tone_onsets", None)
+            load_derivative_tone_onsets = getattr(module, "load_derivative_tone_onsets", None)
+            estimate_onset_shift_seconds = getattr(module, "estimate_onset_shift_seconds", None)
 
 
 
@@ -192,6 +205,7 @@ def main(argv: list[str]):
     p.add_argument("--sfreq", type=float, default=256.0)
     p.add_argument("--augmented-dir", type=Path, default=None)
     p.add_argument("--check-onsets", action="store_true", help="Verify stimulus onsets for event-based epoch indexes (YOTO)")
+    p.add_argument("--compare-derivatives", action="store_true", help="Compare raw events.tsv onset timing against derivatives task_event.mat when available")
     args = p.parse_args(argv)
 
     ok("Starting pipeline verification")
@@ -261,20 +275,10 @@ def main(argv: list[str]):
                                 continue
                             cfg = load_yoto_config(PPath.cwd() / "configs" / "yoto_events.yaml") if load_yoto_config else {}
                             mapping = get_event_mapping(cfg) if get_event_mapping else {}
-                            # extract tone onsets via same logic as preprocess
-                            tone_onsets = []
-                            for _, row in ev.iterrows():
-                                stim_id = None
-                                if "value" in ev.columns and pd.notna(row.get("value")):
-                                    try:
-                                        v = int(float(row["value"]))
-                                        stim_id = mapping.get(v)
-                                    except Exception:
-                                        pass
-                                if stim_id is None and "trial_type" in ev.columns:
-                                    stim_id = mapping.get(str(row["trial_type"]).strip())
-                                if stim_id in ("tone_C", "tone_D", "tone_E"):
-                                    tone_onsets.append((float(row.get("onset", 0.0)), stim_id))
+                            if extract_tone_onsets is not None:
+                                tone_onsets = extract_tone_onsets(ev, mapping, onset_offset_seconds=0.0)
+                            else:
+                                tone_onsets = []
                             n_onsets = len(tone_onsets)
                             n_epochs = len(group)
                             if n_onsets == 0:
@@ -290,6 +294,16 @@ def main(argv: list[str]):
                                     bad_idx.append(int(idx))
                             if bad_idx:
                                 print(f"WARN: epoch_idx out of bounds for {src}: {bad_idx}")
+                            if args.compare_derivatives and load_derivative_tone_onsets is not None and estimate_onset_shift_seconds is not None:
+                                derivative_onsets = load_derivative_tone_onsets(PPath(src), mapping, onset_offset_seconds=0.0)
+                                if not derivative_onsets:
+                                    print(f"INFO: no derivative task_event.mat for {src}")
+                                else:
+                                    shift = estimate_onset_shift_seconds(tone_onsets, derivative_onsets)
+                                    if shift is None:
+                                        print(f"WARN: could not estimate raw->derivative shift for {src}")
+                                    else:
+                                        print(f"OK: estimated raw->derivative onset shift for {src}: {shift:.3f}s")
                     except Exception as e:
                         print("Error during onset checks:", e)
 
