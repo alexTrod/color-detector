@@ -392,6 +392,7 @@ def train_labram(
     n_splits: int = 5,
     probe_c: float = 0.1,
     label_grouping: str = "none",
+    scaler_robust: bool = True,
 ) -> dict:
     np.random.seed(SEED)
     torch.manual_seed(SEED)
@@ -424,7 +425,7 @@ def train_labram(
             probe_c = 0.01
     elif feature_set == "labram_plus_erp":
         combined_features = np.concatenate([labram_features, erp_summary], axis=1)
-        use_scaler_robust = True
+        use_scaler_robust = scaler_robust
     else:
         combined_features = labram_features
         use_scaler_robust = True
@@ -519,6 +520,7 @@ def main() -> int:
         choices=("none", "hue_12", "hue_8", "hue_6", "basic_4"),
         help="Coarse label grouping for color (hue_12/8/6: bins; basic_4: unique hues)",
     )
+    parser.add_argument("--scaler", type=str, default="robust", choices=("robust", "standard"))
     args = parser.parse_args()
     train_labram(
         epoch_index_path=Path(args.epoch_index),
@@ -537,6 +539,7 @@ def main() -> int:
         n_splits=args.n_splits,
         probe_c=args.probe_c,
         label_grouping=args.label_grouping,
+        scaler_robust=(args.scaler == "robust"),
     )
     return 0
 

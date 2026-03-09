@@ -48,9 +48,9 @@ def main() -> int:
         choices=("none", "hue_12", "hue_8", "hue_6", "basic_4"),
         help="Coarse label grouping (basic_4=best for combined color; none=raw 969 classes)",
     )
-    parser.add_argument("--feature-set", type=str, default="erp", choices=("erp", "labram", "labram_plus_erp"))
-    parser.add_argument("--probe-c", type=float, default=0.1)
-    parser.add_argument("--n-splits", type=int, default=5)
+    parser.add_argument("--feature-set", type=str, default="labram_plus_erp", choices=("erp", "labram", "labram_plus_erp"))
+    parser.add_argument("--probe-c", type=float, default=0.005)
+    parser.add_argument("--n-splits", type=int, default=10)
     args = parser.parse_args()
 
     root = resolve_root()

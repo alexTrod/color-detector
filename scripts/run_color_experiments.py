@@ -26,7 +26,13 @@ def get_commit() -> str:
     return out.stdout.strip()
 
 
-def run_one(label_grouping: str, feature_set: str, probe_c: float, n_splits: int) -> float | None:
+def run_one(
+    label_grouping: str,
+    feature_set: str,
+    probe_c: float,
+    n_splits: int,
+    scaler: str = "robust",
+) -> float | None:
     cmd = [
         str(PY),
         str(TRAIN_SCRIPT),
@@ -46,6 +52,8 @@ def run_one(label_grouping: str, feature_set: str, probe_c: float, n_splits: int
         str(probe_c),
         "--n-splits",
         str(n_splits),
+        "--scaler",
+        scaler,
     ]
     try:
         result = subprocess.run(
@@ -88,9 +96,10 @@ def main() -> int:
     features = ["erp", "labram_plus_erp", "labram"]
     probe_cs = [0.005, 0.01, 0.015, 0.02, 0.03, 0.04, 0.05, 0.08, 0.1, 0.2]
     n_splits_list = [5, 10]
+    scalers = ["robust", "standard"]
 
     import itertools
-    configs = list(itertools.product(labels, features, probe_cs, n_splits_list))
+    configs = list(itertools.product(labels, features, probe_cs, n_splits_list, scalers))
     # Shuffle and take first N so we get variety
     import random
     random.seed(42)
@@ -99,10 +108,10 @@ def main() -> int:
 
     best_f1 = 0.0
     commit = get_commit()
-    for i, (lg, fs, pc, ns) in enumerate(configs):
-        desc = f"color {lg} {fs} C={pc} n_splits={ns}"
+    for i, (lg, fs, pc, ns, scal) in enumerate(configs):
+        desc = f"color {lg} {fs} C={pc} n_splits={ns} scaler={scal}"
         print(f"[{i+1}/{args.num}] {desc} ...", flush=True)
-        f1 = run_one(lg, fs, pc, ns)
+        f1 = run_one(lg, fs, pc, ns, scal)
         if f1 is None:
             status = "crash"
             f1 = 0.0
