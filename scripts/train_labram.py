@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EPOCH_INDEX = ROOT / "data/manifests/epoch_index_yoto_tones.csv"
 OUT_METRICS = ROOT / "runs/labram_metrics.json"
 LABRAM_REPO = ROOT / "vendor/LaBraM"
+COLOR_CHANNEL_LAYOUTS = ROOT / "configs/color_channel_layouts.yaml"
 DEFAULT_CHECKPOINT = LABRAM_REPO / "checkpoints/labram-base.pth"
 DEFAULT_CHECKPOINT_URL = "https://raw.githubusercontent.com/935963004/LaBraM/main/checkpoints/labram-base.pth"
 SEED = 42
@@ -79,6 +80,19 @@ def read_brainvision_channel_names(vhdr_path: Path) -> list[str]:
     return channel_names
 
 
+def read_channel_names_for_source(source_path: Path, dataset_id: str | None = None) -> list[str]:
+    """Return channel names for a source file (.vhdr, .mat, or use color layout config)."""
+    if source_path.suffix.lower() == ".vhdr":
+        return read_brainvision_channel_names(source_path)
+    if source_path.suffix.lower() == ".mat" and COLOR_CHANNEL_LAYOUTS.exists():
+        import yaml
+        layouts = yaml.safe_load(COLOR_CHANNEL_LAYOUTS.read_text()) or {}
+        channels = layouts.get(dataset_id or "hajonides_j289e")
+        if isinstance(channels, list):
+            return [canonicalize_channel_name(c) for c in channels]
+    return []
+
+
 def resample_last_axis(arr: np.ndarray, target_len: int) -> np.ndarray:
     if arr.shape[-1] == target_len:
         return arr.astype(np.float32, copy=False)
@@ -120,7 +134,9 @@ def collect_channel_layouts(df: pd.DataFrame) -> tuple[list[str], dict[str, list
         source_path = Path(source_file)
         if not source_path.is_absolute():
             source_path = ROOT / source_path
-        channels = read_brainvision_channel_names(source_path)
+        sub = df[df["source_file"].astype(str) == source_file]
+        dataset_id = sub["dataset_id"].iloc[0] if "dataset_id" in sub.columns and len(sub) else None
+        channels = read_channel_names_for_source(source_path, dataset_id=dataset_id)
         usable = [ch for ch in channels if ch in STANDARD_1020]
         if not usable:
             raise ValueError(f"No LaBraM-compatible 10-20 channels found in {source_path}")
@@ -217,11 +233,49 @@ def load_pretrained_weights(model: torch.nn.Module, checkpoint_path: Path) -> di
     }
 
 
-def load_data(epoch_index_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
+def group_stimulus_id(stim_id: str, scheme: str) -> str:
+    """Map fine-grained stimulus_id to coarser label (paper-backed groupings)."""
+    if not scheme or scheme == "none":
+        return stim_id
+    s = str(stim_id)
+    # hue_N: N in 0..956 (957 steps ~ 360 deg)
+    if s.startswith("hue_"):
+        try:
+            n = int(s.split("_", 1)[1])
+        except (IndexError, ValueError):
+            return stim_id
+        n = max(0, min(n, 956))
+        if scheme == "hue_12":
+            return f"hue_bin_{min(n * 12 // 957, 11)}"
+        if scheme == "hue_8":
+            return f"hue_bin_{min(n * 8 // 957, 7)}"
+        if scheme == "basic_4":
+            angle = n * 360.0 / 957.0
+            idx = int(angle / 90.0) % 4
+            return ["red", "yellow", "green", "blue"][idx]
+    # color_N: discrete color IDs (e.g. Bae & Luck 16); map into same bin count
+    if s.startswith("color_"):
+        try:
+            n = int(s.split("_", 1)[1])
+        except (IndexError, ValueError):
+            return stim_id
+        if scheme == "hue_12":
+            return f"hue_bin_{n % 12}"
+        if scheme == "hue_8":
+            return f"hue_bin_{n % 8}"
+        if scheme == "basic_4":
+            return ["red", "yellow", "green", "blue"][n % 4]
+    return stim_id
+
+
+def load_data(
+    epoch_index_path: Path,
+    label_grouping: str = "none",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
     df = pd.read_csv(epoch_index_path)
     common_channels, selection_by_source = collect_channel_layouts(df)
     if "stimulus_id" in df.columns and "epoch_idx" in df.columns:
-        return _load_data_long_format(df, common_channels, selection_by_source)
+        return _load_data_long_format(df, common_channels, selection_by_source, label_grouping)
     return _load_data_per_recording(df, common_channels, selection_by_source)
 
 
@@ -234,6 +288,7 @@ def _load_data_long_format(
     df: pd.DataFrame,
     common_channels: list[str],
     selection_by_source: dict[str, list[int]],
+    label_grouping: str = "none",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
     X_list, y_list, g_list = [], [], []
     for epochs_file, grp in df.groupby("epochs_file"):
@@ -250,7 +305,7 @@ def _load_data_long_format(
             channel_indices = selection_by_source[str(source_path)]
             x = prepare_for_labram(arr[epoch_idx : epoch_idx + 1], channel_indices=channel_indices)
             X_list.append(x)
-            y_list.append(stim_id)
+            y_list.append(group_stimulus_id(stim_id, label_grouping))
             subj = getattr(row, "subject_id", "unknown")
             ds = getattr(row, "dataset_id", "unknown")
             g_list.append(f"{ds}::{subj}")
@@ -328,11 +383,16 @@ def train_labram(
     backbone_lr_scale: float = 0.1,
     weight_decay: float = 0.05,
     write_json: bool = True,
+    use_erp_features: bool = True,
+    feature_set: str = "erp",
+    n_splits: int = 5,
+    probe_c: float = 0.1,
+    label_grouping: str = "none",
 ) -> dict:
     np.random.seed(SEED)
     torch.manual_seed(SEED)
 
-    X, y, groups, channel_names = load_data(epoch_index_path)
+    X, y, groups, channel_names = load_data(epoch_index_path, label_grouping=label_grouping)
     if len(y) < 2:
         print(f"Not enough samples ({len(y)}); need at least 2.")
         return {"accuracy": None, "macro_f1": None, "n_train": 0, "n_test": 0, "label_classes": []}
@@ -344,13 +404,6 @@ def train_labram(
     print(f"Training on {n_samples} samples across {n_groups} subject groups")
     print(f"Using {len(channel_names)} common channels: {channel_names}")
 
-    if n_samples < 10 or n_groups < 2:
-        split = ShuffleSplit(n_splits=1, test_size=0.25, random_state=SEED)
-        train_idx, test_idx = next(split.split(X, y_enc))
-    else:
-        split = GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=SEED)
-        train_idx, test_idx = next(split.split(X, y_enc, groups))
-
     checkpoint_path = resolve_checkpoint_path(checkpoint)
     labram_features, checkpoint_load = extract_labram_features(
         X,
@@ -360,34 +413,66 @@ def train_labram(
         batch_size=batch_size,
     )
     erp_summary = build_erp_summary_features(X)
-    combined_features = labram_features  # labram-only, no ERP summary
+    if feature_set == "erp":
+        combined_features = erp_summary
+        use_scaler_robust = False
+        if probe_c == 0.1:
+            probe_c = 0.01
+    elif feature_set == "labram_plus_erp":
+        combined_features = np.concatenate([labram_features, erp_summary], axis=1)
+        use_scaler_robust = True
+    else:
+        combined_features = labram_features
+        use_scaler_robust = True
 
-    # Small subject-held-out datasets were more stable with a frozen encoder plus a
-    # regularized linear head than with end-to-end fine-tuning.
-    probe_c = 0.04
-    clf = make_pipeline(
-        RobustScaler(),
-        LogisticRegression(
-            max_iter=3000,
-            class_weight="balanced",
-            C=probe_c,
-            random_state=SEED,
-        ),
-    )
-    clf.fit(combined_features[train_idx], y_enc[train_idx])
-    y_pred = clf.predict(combined_features[test_idx])
-    y_true = y_enc[test_idx]
-    accuracy = float((y_pred == y_true).mean()) if len(y_true) else 0.0
-    macro_f1 = float(f1_score(y_true, y_pred, average="macro")) if len(y_true) else 0.0
+    if n_samples < 10 or n_groups < 2:
+        splitter = ShuffleSplit(n_splits=n_splits, test_size=0.25, random_state=SEED)
+        split_iter = splitter.split(X, y_enc)
+    else:
+        splitter = GroupShuffleSplit(n_splits=n_splits, test_size=0.25, random_state=SEED)
+        split_iter = splitter.split(X, y_enc, groups)
+
+    accs: list[float] = []
+    f1s: list[float] = []
+    scaler_cls = RobustScaler if use_scaler_robust else StandardScaler
+    for train_idx, test_idx in split_iter:
+        clf = make_pipeline(
+            scaler_cls(),
+            LogisticRegression(
+                max_iter=3000,
+                class_weight="balanced",
+                C=probe_c,
+                random_state=SEED,
+            ),
+        )
+        clf.fit(combined_features[train_idx], y_enc[train_idx])
+        y_pred = clf.predict(combined_features[test_idx])
+        y_true = y_enc[test_idx]
+        accs.append(float((y_pred == y_true).mean()) if len(y_true) else 0.0)
+        f1s.append(float(f1_score(y_true, y_pred, average="macro")) if len(y_true) else 0.0)
+
+    accuracy_mean = float(np.mean(accs))
+    accuracy_std = float(np.std(accs))
+    macro_f1_mean = float(np.mean(f1s))
+    macro_f1_std = float(np.std(f1s))
+    if n_groups >= 2:
+        _split = GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=SEED)
+        train_idx, test_idx = next(_split.split(X, y_enc, groups))
+    else:
+        _split = ShuffleSplit(n_splits=1, test_size=0.25, random_state=SEED)
+        train_idx, test_idx = next(_split.split(X, y_enc))
 
     metrics = {
-        "accuracy": accuracy,
-        "macro_f1": macro_f1,
+        "accuracy": accuracy_mean,
+        "accuracy_std": accuracy_std,
+        "macro_f1": macro_f1_mean,
+        "macro_f1_std": macro_f1_std,
+        "n_splits": n_splits,
         "n_train": int(len(train_idx)),
         "n_test": int(len(test_idx)),
         "label_classes": list(le.classes_),
         "model": "labram_base_patch200_200",
-        "classifier": "labram_frozen_features_plus_erp_logreg",
+        "classifier": f"labram_frozen_probe_{feature_set}",
         "checkpoint": str(checkpoint_path),
         "checkpoint_load": checkpoint_load,
         "input_shape": [int(X.shape[1]), int(X.shape[2]), int(X.shape[3])],
@@ -395,8 +480,12 @@ def train_labram(
         "labram_feature_dim": int(labram_features.shape[1]),
         "erp_summary_dim": int(erp_summary.shape[1]),
         "probe_c": probe_c,
-        "note": "Uses official pretrained LaBraM as a frozen encoder on the true EEG channel layout, then fits a regularized linear probe on LaBraM features plus compact ERP summary features.",
+        "feature_set": feature_set,
+        "note": f"GroupShuffleSplit probe on {feature_set}.",
+        "label_grouping": label_grouping,
     }
+    print(f"Accuracy (mean +/- std over {n_splits} splits): {accuracy_mean:.4f} +/- {accuracy_std:.4f}")
+    print(f"Macro F1 (mean +/- std): {macro_f1_mean:.4f} +/- {macro_f1_std:.4f}")
     if write_json:
         out_metrics_path.parent.mkdir(parents=True, exist_ok=True)
         out_metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
@@ -416,6 +505,16 @@ def main() -> int:
     parser.add_argument("--weight-decay", type=float, default=0.05)
     parser.add_argument("--epoch-index", type=str, default=str(EPOCH_INDEX))
     parser.add_argument("--out-metrics", type=str, default=str(OUT_METRICS))
+    parser.add_argument("--feature-set", type=str, default="erp", choices=("erp", "labram", "labram_plus_erp"), help="Feature set (erp=sweep best)")
+    parser.add_argument("--n-splits", type=int, default=5, help="Number of group CV splits for accuracy estimate")
+    parser.add_argument("--probe-c", type=float, default=0.1, help="LogisticRegression C (default 0.01 for erp)")
+    parser.add_argument(
+        "--label-grouping",
+        type=str,
+        default="none",
+        choices=("none", "hue_12", "hue_8", "basic_4"),
+        help="Coarse label grouping for color (hue_12/hue_8: paper-backed bins; basic_4: unique hues)",
+    )
     args = parser.parse_args()
     train_labram(
         epoch_index_path=Path(args.epoch_index),
@@ -429,6 +528,11 @@ def main() -> int:
         backbone_lr_scale=args.backbone_lr_scale,
         weight_decay=args.weight_decay,
         write_json=True,
+        use_erp_features=args.feature_set != "labram",
+        feature_set=args.feature_set,
+        n_splits=args.n_splits,
+        probe_c=args.probe_c,
+        label_grouping=args.label_grouping,
     )
     return 0
 
