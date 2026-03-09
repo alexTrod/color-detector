@@ -45,9 +45,12 @@ def main() -> int:
         "--label-grouping",
         type=str,
         default="basic_4",
-        choices=("none", "hue_12", "hue_8", "basic_4"),
+        choices=("none", "hue_12", "hue_8", "hue_6", "basic_4"),
         help="Coarse label grouping (basic_4=best for combined color; none=raw 969 classes)",
     )
+    parser.add_argument("--feature-set", type=str, default="erp", choices=("erp", "labram", "labram_plus_erp"))
+    parser.add_argument("--probe-c", type=float, default=0.1)
+    parser.add_argument("--n-splits", type=int, default=5)
     args = parser.parse_args()
 
     root = resolve_root()
@@ -118,6 +121,12 @@ def main() -> int:
                         str(args.batch_size),
                         "--label-grouping",
                         args.label_grouping,
+                        "--feature-set",
+                        args.feature_set,
+                        "--probe-c",
+                        str(args.probe_c),
+                        "--n-splits",
+                        str(args.n_splits),
                     ],
                     root,
                 )

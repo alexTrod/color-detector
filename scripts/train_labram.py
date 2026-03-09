@@ -249,6 +249,8 @@ def group_stimulus_id(stim_id: str, scheme: str) -> str:
             return f"hue_bin_{min(n * 12 // 957, 11)}"
         if scheme == "hue_8":
             return f"hue_bin_{min(n * 8 // 957, 7)}"
+        if scheme == "hue_6":
+            return f"hue_bin_{min(n * 6 // 957, 5)}"
         if scheme == "basic_4":
             angle = n * 360.0 / 957.0
             idx = int(angle / 90.0) % 4
@@ -263,6 +265,8 @@ def group_stimulus_id(stim_id: str, scheme: str) -> str:
             return f"hue_bin_{n % 12}"
         if scheme == "hue_8":
             return f"hue_bin_{n % 8}"
+        if scheme == "hue_6":
+            return f"hue_bin_{n % 6}"
         if scheme == "basic_4":
             return ["red", "yellow", "green", "blue"][n % 4]
     return stim_id
@@ -512,8 +516,8 @@ def main() -> int:
         "--label-grouping",
         type=str,
         default="none",
-        choices=("none", "hue_12", "hue_8", "basic_4"),
-        help="Coarse label grouping for color (hue_12/hue_8: paper-backed bins; basic_4: unique hues)",
+        choices=("none", "hue_12", "hue_8", "hue_6", "basic_4"),
+        help="Coarse label grouping for color (hue_12/8/6: bins; basic_4: unique hues)",
     )
     args = parser.parse_args()
     train_labram(
