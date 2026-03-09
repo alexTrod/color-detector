@@ -44,9 +44,9 @@ def main() -> int:
     parser.add_argument(
         "--label-grouping",
         type=str,
-        default="none",
+        default="basic_4",
         choices=("none", "hue_12", "hue_8", "basic_4"),
-        help="Coarse label grouping for color classification",
+        help="Coarse label grouping (basic_4=best for combined color; none=raw 969 classes)",
     )
     args = parser.parse_args()
 
