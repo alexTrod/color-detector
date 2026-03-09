@@ -18,7 +18,7 @@ from sklearn.metrics import f1_score
 from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler, StandardScaler
 
 ROOT = Path(__file__).resolve().parents[1]
 EPOCH_INDEX = ROOT / "data/manifests/epoch_index_yoto_tones.csv"
@@ -365,7 +365,7 @@ def train_labram(
     # Small subject-held-out datasets were more stable with a frozen encoder plus a
     # regularized linear head than with end-to-end fine-tuning.
     clf = make_pipeline(
-        StandardScaler(),
+        RobustScaler(),
         LogisticRegression(
             max_iter=3000,
             class_weight="balanced",
