@@ -364,12 +364,13 @@ def train_labram(
 
     # Small subject-held-out datasets were more stable with a frozen encoder plus a
     # regularized linear head than with end-to-end fine-tuning.
+    probe_c = 0.04
     clf = make_pipeline(
         RobustScaler(),
         LogisticRegression(
             max_iter=3000,
             class_weight="balanced",
-            C=0.05,
+            C=probe_c,
             random_state=SEED,
         ),
     )
@@ -393,7 +394,7 @@ def train_labram(
         "channel_names": channel_names,
         "labram_feature_dim": int(labram_features.shape[1]),
         "erp_summary_dim": int(erp_summary.shape[1]),
-        "probe_c": 0.05,
+        "probe_c": probe_c,
         "note": "Uses official pretrained LaBraM as a frozen encoder on the true EEG channel layout, then fits a regularized linear probe on LaBraM features plus compact ERP summary features.",
     }
     if write_json:
