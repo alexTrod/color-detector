@@ -345,10 +345,10 @@ def train_labram(
     print(f"Using {len(channel_names)} common channels: {channel_names}")
 
     if n_samples < 10 or n_groups < 2:
-        split = ShuffleSplit(n_splits=1, test_size=0.3, random_state=SEED)
+        split = ShuffleSplit(n_splits=1, test_size=0.25, random_state=SEED)
         train_idx, test_idx = next(split.split(X, y_enc))
     else:
-        split = GroupShuffleSplit(n_splits=1, test_size=0.3, random_state=SEED)
+        split = GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=SEED)
         train_idx, test_idx = next(split.split(X, y_enc, groups))
 
     checkpoint_path = resolve_checkpoint_path(checkpoint)
