@@ -360,7 +360,7 @@ def train_labram(
         batch_size=batch_size,
     )
     erp_summary = build_erp_summary_features(X)
-    combined_features = np.concatenate([labram_features, erp_summary], axis=1)
+    combined_features = labram_features  # labram-only, no ERP summary
 
     # Small subject-held-out datasets were more stable with a frozen encoder plus a
     # regularized linear head than with end-to-end fine-tuning.
