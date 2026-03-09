@@ -5,13 +5,32 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
 import mne
 import numpy as np
 import pandas as pd
 
-from scripts.yoto_utils import get_event_mapping, load_config, load_events_tsv
+try:
+    from scripts.yoto_utils import (
+        estimate_onset_shift_seconds,
+        extract_tone_onsets,
+        get_event_mapping,
+        load_config,
+        load_derivative_tone_onsets,
+        load_events_tsv,
+    )
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from yoto_utils import (  # type: ignore
+        estimate_onset_shift_seconds,
+        extract_tone_onsets,
+        get_event_mapping,
+        load_config,
+        load_derivative_tone_onsets,
+        load_events_tsv,
+    )
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PREPROC = ROOT / "configs/yoto_preprocessing.yaml"
@@ -122,14 +141,11 @@ def preprocess_chain(raw: mne.io.Raw, cfg: dict) -> None:
 
 def events_to_epochs(
     raw: mne.io.Raw,
-    events_df: pd.DataFrame,
-    event_mapping: dict[int | str, str],
+    tone_onsets: list[tuple[float, str]],
     tmin: float,
     tmax: float,
-    stim_col: str = "value",
-    trial_type_col: str = "trial_type",
-    onset_col: str = "onset",
-) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    normalize_to_recording: bool = False,
+) -> tuple[np.ndarray, np.ndarray, list[str], list[float]]:
     """Return (epochs array [N,C,T], event_indices, stimulus_ids)."""
 
     data = raw.get_data()
@@ -138,41 +154,47 @@ def events_to_epochs(
     n_samp_post = int(round(tmax * sfreq))
     n_samp = n_samp_pre + n_samp_post
     n_ch = data.shape[0]
+    duration_sec = float(data.shape[1] / sfreq)
     stimulus_ids = []
     valid_starts = []
-    # Ensure chronological order - TSV files may not be sorted by onset
-    events_df = events_df.sort_values(by=onset_col).reset_index(drop=True)
-    for _, row in events_df.iterrows():
-        stim_id = None
-        if stim_col in events_df.columns and pd.notna(row.get(stim_col)):
-            try:
-                v = int(float(row[stim_col]))
-                stim_id = event_mapping.get(v)
-            except (ValueError, TypeError):
-                pass
-        if stim_id is None and trial_type_col in events_df.columns:
-            #stim_id = event_mapping.get(str(row[trial_type_col]).strip())
-            continue
-        if stim_id not in ("tone_C", "tone_D", "tone_E"):
-            continue
-        onset_samp = int(round(float(row[onset_col]) * sfreq))
+    onset_seconds = []
+    for onset_sec, stim_id in tone_onsets:
+        onset_val = float(onset_sec)
+        if normalize_to_recording and duration_sec > 0.0:
+            onset_val = onset_val % duration_sec
+        onset_samp = int(round(onset_val * sfreq))
         start = onset_samp - n_samp_pre
         end = onset_samp + n_samp_post
-
-        #print(f"valid stimulus {stim_id} starts at {start} samples and ends at {end} samples in data.shape: {data.shape}")
-        #print(f"onset at {row[onset_col]}")
         if start < 0 or end > data.shape[1]:
             continue
         stimulus_ids.append(stim_id)
         valid_starts.append(start)
+        onset_seconds.append(onset_val)
     if not valid_starts:
-        return np.empty((0, n_ch, n_samp), dtype=np.float32), np.array([], dtype=int), []
+        return np.empty((0, n_ch, n_samp), dtype=np.float32), np.array([], dtype=int), [], []
     epochs = np.zeros((len(valid_starts), n_ch, n_samp), dtype=np.float32)
     for i, start in enumerate(valid_starts):
         epochs[i] = data[:, start : start + n_samp]
-   # print(f"epochs: {epochs.shape}, valid_starts: {valid_starts}, stimulus_ids: {stimulus_ids}")
-    #print(f"the subject had a total of {len(valid_starts)} valid stimuli + {len(events_df) - len(valid_starts)} invalid stimuli ")
-    return epochs, np.array(valid_starts), stimulus_ids
+    return epochs, np.array(valid_starts), stimulus_ids, onset_seconds
+
+
+def _estimate_global_onset_shift(
+    vhdr_paths: list[Path],
+    event_mapping: dict[int | str, str],
+) -> float | None:
+    shifts: list[float] = []
+    for vhdr in vhdr_paths:
+        events_df = load_events_tsv(vhdr)
+        if events_df is None:
+            continue
+        raw_onsets = extract_tone_onsets(events_df, event_mapping, onset_offset_seconds=0.0)
+        derivative_onsets = load_derivative_tone_onsets(vhdr, event_mapping, onset_offset_seconds=0.0)
+        shift = estimate_onset_shift_seconds(raw_onsets, derivative_onsets)
+        if shift is not None:
+            shifts.append(float(shift))
+    if not shifts:
+        return None
+    return float(np.median(np.array(shifts, dtype=np.float64)))
 
 
 def run_preprocess_yoto(
@@ -186,18 +208,24 @@ def run_preprocess_yoto(
     config_preproc_path: Path = CONFIG_PREPROC,
     config_events_path: Path = CONFIG_EVENTS,
     raw_root: Path = RAW_ROOT,
+    tmin_override: float | None = None,
+    tmax_override: float | None = None,
 ) -> dict[str, Any]:
 
     cfg_preproc = _resolve_preproc_config(config_preproc_path, skip_asr, skip_ica)
     cfg_events = load_config(config_events_path)
     event_mapping = get_event_mapping(cfg_events)
-    print(f"event_mapping: {event_mapping}")
     if not event_mapping:
         print("Warning: no event_value_to_stimulus in yoto_events.yaml; no tone epochs will be produced.")
-    print(f"cfg_events: {cfg_events}")
+
+    prefer_derivatives = bool(cfg_events.get("prefer_derivatives_task_event", True))
+    raw_onset_offset = float(cfg_events.get("onset_offset_seconds", 0.0))
+    derivative_onset_offset = float(cfg_events.get("derivative_onset_offset_seconds", 0.0))
+    normalize_onsets_to_recording = bool(cfg_events.get("normalize_onsets_to_recording", True))
+
     epoch_cfg = cfg_preproc.get("epoch", {})
-    tmin = float(epoch_cfg.get("tmin", -0.2))
-    tmax = float(epoch_cfg.get("tmax", 0.8))
+    tmin = float(tmin_override if tmin_override is not None else epoch_cfg.get("tmin", -0.2))
+    tmax = float(tmax_override if tmax_override is not None else epoch_cfg.get("tmax", 0.8))
 
     if manifest_path.exists():
         df = pd.read_csv(manifest_path)
@@ -207,6 +235,13 @@ def run_preprocess_yoto(
         vhdr_paths = [Path(p) for p in df["file_path"].unique()]
     else:
         vhdr_paths = list((raw_root / dataset_id).rglob(f"*{task_contains}*eeg.vhdr"))
+    vhdr_paths = sorted(vhdr_paths)
+
+    if bool(cfg_events.get("auto_estimate_onset_offset_from_derivatives", True)):
+        estimated_shift = _estimate_global_onset_shift(vhdr_paths=vhdr_paths, event_mapping=event_mapping)
+        if estimated_shift is not None:
+            raw_onset_offset = estimated_shift
+            print(f"Estimated raw->derivative onset shift: {raw_onset_offset:.3f}s (median)")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     index_rows: list[dict] = []
@@ -219,20 +254,44 @@ def run_preprocess_yoto(
             continue
         preprocess_chain(raw, cfg_preproc)
         events_df = load_events_tsv(vhdr)
-        if events_df is None or event_mapping is None:
+        if events_df is None:
             continue
-        epochs, _, stimulus_ids = events_to_epochs(
-            raw, events_df, event_mapping, tmin, tmax
+
+        raw_onsets = extract_tone_onsets(
+            events_df,
+            event_mapping,
+            onset_offset_seconds=raw_onset_offset,
+        )
+        derivative_onsets = load_derivative_tone_onsets(
+            vhdr,
+            event_mapping,
+            onset_offset_seconds=derivative_onset_offset,
+        )
+        if prefer_derivatives and derivative_onsets:
+            tone_onsets = derivative_onsets
+            onset_source = "derivatives_task_event"
+            offset_applied = derivative_onset_offset
+        else:
+            tone_onsets = raw_onsets
+            onset_source = "events_tsv"
+            offset_applied = raw_onset_offset
+
+        epochs, _, stimulus_ids, onset_seconds = events_to_epochs(
+            raw,
+            tone_onsets,
+            tmin,
+            tmax,
+            normalize_to_recording=normalize_onsets_to_recording,
         )
         if epochs.size == 0:
             continue
         parts = vhdr.parts
         subject_id = next((p for p in parts if p.startswith("sub-")), "unknown")
-        print(f"subject_id: {subject_id}")
         stem = f"{dataset_id}__{subject_id}__{vhdr.stem}"
         out_path = out_dir / f"{stem}.npy"
         np.save(out_path, epochs)
-        for epoch_idx, stim_id in enumerate(stimulus_ids):
+        print(f"{subject_id} {vhdr.name}: {len(stimulus_ids)} epochs via {onset_source}")
+        for epoch_idx, (stim_id, onset_sec) in enumerate(zip(stimulus_ids, onset_seconds)):
             index_rows.append({
                 "dataset_id": dataset_id,
                 "subject_id": subject_id,
@@ -240,10 +299,13 @@ def run_preprocess_yoto(
                 "epochs_file": str(out_path),
                 "epoch_idx": epoch_idx,
                 "stimulus_id": stim_id,
+                "onset_sec": float(onset_sec),
+                "onset_source": onset_source,
+                "onset_offset_sec_applied": float(offset_applied),
+                "onset_wrapped_to_recording": normalize_onsets_to_recording,
                 "n_channels": int(epochs.shape[1]),
                 "n_samples": int(epochs.shape[2]),
             })
-        print(f"index_rows: {index_rows}")
 
     out_index.parent.mkdir(parents=True, exist_ok=True)
     if index_rows:
@@ -273,6 +335,8 @@ def main() -> int:
     parser.add_argument("--out-dir", type=str, default=str(OUT_EPOCH_DIR))
     parser.add_argument("--skip-asr", action="store_true")
     parser.add_argument("--skip-ica", action="store_true")
+    parser.add_argument("--tmin", type=float, default=None)
+    parser.add_argument("--tmax", type=float, default=None)
     args = parser.parse_args()
 
     run_preprocess_yoto(
@@ -283,6 +347,8 @@ def main() -> int:
         out_dir=Path(args.out_dir),
         skip_asr=args.skip_asr,
         skip_ica=args.skip_ica,
+        tmin_override=args.tmin,
+        tmax_override=args.tmax,
     )
     return 0
 
