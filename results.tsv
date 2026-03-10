@@ -1,0 +1,11 @@
+commit	val_bpb	memory_gb	status	description
+b1ce603	0.536746	0.0	keep	baseline binary modality (auditory vs visual), C=0.05
+1d18ed1	0.508395	0.0	keep	increase probe C to 1.0
+f859a3d	0.482797	0.0	keep	increase probe C to 5.0
+36e273e	0.477567	0.0	keep	increase probe C to 20.0
+64701d6	0.548582	0.0	discard	remove ERP summary features (LABRAM-only probe)
+ce4effe	0.434761	0.0	keep	downsample to balanced classes before split
+1491e7c	0.438208	0.0	discard	raise C to 50 on balanced data
+49ac218	0.437223	0.0	discard	remove per-epoch baseline subtraction
+868b18b	0.432792	0.0	keep	use liblinear solver with balanced downsampling
+d98b493	0.429838	0.0	keep	tune C to 10 with liblinear
