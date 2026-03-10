@@ -415,6 +415,7 @@ def train_labram(
             max_iter=3000,
             class_weight="balanced",
             C=20.0,
+            solver="liblinear",
             random_state=SEED,
         ),
     )
