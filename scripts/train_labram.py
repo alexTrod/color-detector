@@ -363,6 +363,21 @@ def train_labram(
         groups = groups[mask]
         print(f"Filtered to labels {sorted(keep_set)}: {len(y)} samples remain")
 
+    # Balance classes by downsampling the majority class to stabilize the probe.
+    unique_labels, counts = np.unique(y, return_counts=True)
+    if len(unique_labels) > 1 and counts.max() != counts.min():
+        rng = np.random.default_rng(SEED)
+        target = int(counts.min())
+        kept_idx = []
+        for lbl in unique_labels:
+            idx = np.flatnonzero(y == lbl)
+            kept_idx.append(rng.choice(idx, size=target, replace=False))
+        keep_idx = np.sort(np.concatenate(kept_idx))
+        X = X[keep_idx]
+        y = y[keep_idx]
+        groups = groups[keep_idx]
+        print(f"Balanced classes to {target} samples per label ({len(y)} total)")
+
     if len(y) < 2:
         print(f"Not enough samples ({len(y)}); need at least 2.")
         return {"accuracy": None, "macro_f1": None, "n_train": 0, "n_test": 0, "label_classes": []}
