@@ -32,7 +32,7 @@ def load_events_tsv(vhdr_path: Path) -> pd.DataFrame | None:
         tsv = vhdr_path.with_suffix(".tsv")
     if not tsv.exists():
         return None
-    return pd.read_csv(tsv, sep="\t")
+    return pd.read_csv(tsv, sep="\t", encoding="utf-8", encoding_errors="replace")
 
 
 def extract_tone_onsets(

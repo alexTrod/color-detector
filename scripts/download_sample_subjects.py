@@ -248,6 +248,50 @@ def osf_files(node: str, token: str | None) -> list[dict]:
     return out
 
 
+# Known OSF folder IDs for direct listing (faster than full tree walk)
+HAJONIDES_PREPROCESSED_FOLDER_ID = "5f16f2b10596f60152798b83"
+BAELUCK_EEG_FOLDER_ID = "660f5395bba39a1cc1729f1c"
+
+
+def osf_list_folder(
+    node: str,
+    folder_id: str,
+    token: str | None = None,
+) -> list[dict]:
+    """List files in a single OSF folder (no recursion). Handles pagination."""
+    base = f"https://api.osf.io/v2/nodes/{node}/files/osfstorage/{folder_id}/"
+    if token:
+        url = f"{base}?view_only={token}"
+    else:
+        url = base
+    out = []
+    while url:
+        resp = requests.get(url, timeout=60)
+        resp.raise_for_status()
+        payload = resp.json()
+        for item in payload.get("data", []):
+            out.append(item)
+        url = payload.get("links", {}).get("next")
+        if url and token and "view_only=" not in url:
+            url = f"{url}&view_only={token}" if "?" in url else f"{url}?view_only={token}"
+    return out
+
+
+def _download_osf_file(download_url: str, out_path: Path, token: str | None = None) -> None:
+    url = download_url
+    if token and "view_only=" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}view_only={token}"
+    with _requests_session() as session:
+        with session.get(url, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with out_path.open("wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+
+
 def download_hajonides_subject(raw_root: Path = RAW_ROOT) -> dict:
     osf_url = "https://osf.io/j289e/?view_only=b13407009b4245f7950960c34a5474a6"
     node, token = parse_osf_info(osf_url)
@@ -270,13 +314,17 @@ def download_hajonides_subject(raw_root: Path = RAW_ROOT) -> dict:
     target = raw_root / "hajonides_j289e"
     target.mkdir(parents=True, exist_ok=True)
     out_path = target / name
-
-    with requests.get(download_url, stream=True, timeout=120) as r:
-        r.raise_for_status()
-        with out_path.open("wb") as f:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
+    remote_size = candidate["attributes"].get("size")
+    if out_path.exists() and (remote_size is None or out_path.stat().st_size == remote_size):
+        return {
+            "dataset": "hajonides_j289e",
+            "subject": "single_file_proxy",
+            "source_file": candidate["attributes"].get("materialized_path"),
+            "target_file": str(out_path),
+            "bytes": out_path.stat().st_size,
+            "skipped": "already_downloaded",
+        }
+    _download_osf_file(download_url, out_path, token)
 
     return {
         "dataset": "hajonides_j289e",
@@ -284,6 +332,141 @@ def download_hajonides_subject(raw_root: Path = RAW_ROOT) -> dict:
         "source_file": candidate["attributes"].get("materialized_path"),
         "target_file": str(out_path),
         "bytes": out_path.stat().st_size,
+    }
+
+
+def download_hajonides_color(
+    max_subjects: int = 10,
+    raw_root: Path = RAW_ROOT,
+) -> dict:
+    """Download up to max_subjects Hajonides (j289e) preprocessed .mat files (color/hue epochs)."""
+    osf_url = "https://osf.io/j289e/?view_only=b13407009b4245f7950960c34a5474a6"
+    node, token = parse_osf_info(osf_url)
+    print("    Listing Hajonides OSF files...", flush=True)
+    files = osf_list_folder(node, HAJONIDES_PREPROCESSED_FOLDER_ID, token)
+    mat_files = [
+        f for f in files
+        if f.get("attributes", {}).get("kind") == "file"
+        and str(f["attributes"].get("name", "")).endswith(".mat")
+    ]
+    mat_files.sort(key=lambda x: x["attributes"].get("name", ""))
+    to_download = mat_files[:max_subjects]
+    target = raw_root / "hajonides_j289e"
+    target.mkdir(parents=True, exist_ok=True)
+    downloaded = []
+    total_bytes = 0
+    for i, f in enumerate(to_download):
+        name = f["attributes"]["name"]
+        out_path = target / name
+        remote_size = f["attributes"].get("size")
+        if out_path.exists() and (remote_size is None or out_path.stat().st_size == remote_size):
+            downloaded.append(str(out_path))
+            total_bytes += out_path.stat().st_size
+            continue
+        print(f"    Downloading {i+1}/{len(to_download)} {name}...", flush=True)
+        _download_osf_file(f["links"]["download"], out_path, token)
+        downloaded.append(str(out_path))
+        total_bytes += out_path.stat().st_size
+    return {
+        "dataset": "hajonides_j289e",
+        "subjects": [re.search(r"S(\d+)", Path(p).name, re.I).group(0) if re.search(r"S(\d+)", Path(p).name, re.I) else Path(p).stem for p in downloaded],
+        "files_downloaded": len(downloaded),
+        "target_dir": str(target),
+        "bytes": total_bytes,
+    }
+
+
+def download_baeluck_color(
+    max_subjects: int = 10,
+    raw_root: Path = RAW_ROOT,
+) -> dict:
+    """Download up to max_subjects Bae & Luck (jnwut) color EEG .mat files. One file per subject/condition."""
+    node = "jnwut"
+    token = None
+    print("    Listing Bae & Luck OSF files...", flush=True)
+    files = osf_list_folder(node, BAELUCK_EEG_FOLDER_ID, token)
+    mat_files = [
+        f for f in files
+        if f.get("attributes", {}).get("kind") == "file"
+        and str(f["attributes"].get("name", "")).endswith(".mat")
+    ]
+    # Extract subject id from name (e.g. Color_NoRotation_OSF_107.mat -> 107)
+    def subj_id(attr):
+        name = attr.get("name", "")
+        m = re.search(r"_(\d+)\.mat$", name)
+        return int(m.group(1)) if m else 0
+    seen = set()
+    selected = []
+    for f in sorted(mat_files, key=lambda x: subj_id(x["attributes"])):
+        sid = subj_id(f["attributes"])
+        if sid and sid not in seen and len(seen) < max_subjects:
+            seen.add(sid)
+            selected.append(f)
+    target = raw_root / "baeluck_jnwut"
+    target.mkdir(parents=True, exist_ok=True)
+    downloaded = []
+    total_bytes = 0
+    for i, f in enumerate(selected):
+        name = f["attributes"]["name"]
+        out_path = target / name
+        remote_size = f["attributes"].get("size")
+        if out_path.exists() and (remote_size is None or out_path.stat().st_size == remote_size):
+            downloaded.append(str(out_path))
+            total_bytes += out_path.stat().st_size
+            continue
+        print(f"    Downloading {i+1}/{len(selected)} {name}...", flush=True)
+        _download_osf_file(f["links"]["download"], out_path, token)
+        downloaded.append(str(out_path))
+        total_bytes += out_path.stat().st_size
+    return {
+        "dataset": "baeluck_jnwut",
+        "subjects": list(seen),
+        "files_downloaded": len(downloaded),
+        "target_dir": str(target),
+        "bytes": total_bytes,
+    }
+
+
+def download_chauhan_color(
+    max_subjects: int = 10,
+    raw_root: Path = RAW_ROOT,
+) -> dict:
+    """Download Chauhan et al. (v9ewj) color hue EEG if available on OSF osfstorage."""
+    node = "v9ewj"
+    token = None
+    files = osf_files(node, token)
+    mat_or_eeg = [
+        f for f in files
+        if f.get("attributes", {}).get("kind") == "file"
+        and (
+            str(f["attributes"].get("name", "")).endswith(".mat")
+            or str(f["attributes"].get("name", "")).endswith(".set")
+            or str(f["attributes"].get("name", "")).endswith(".bdf")
+        )
+    ]
+    mat_or_eeg = mat_or_eeg[:max_subjects]
+    if not mat_or_eeg:
+        return {"dataset": "chauhan_v9ewj", "error": "No EEG/mat files found in OSF osfstorage", "files_downloaded": 0}
+    target = raw_root / "chauhan_v9ewj"
+    target.mkdir(parents=True, exist_ok=True)
+    downloaded = []
+    total_bytes = 0
+    for f in mat_or_eeg:
+        name = f["attributes"]["name"]
+        out_path = target / name
+        remote_size = f["attributes"].get("size")
+        if out_path.exists() and (remote_size is None or out_path.stat().st_size == remote_size):
+            downloaded.append(str(out_path))
+            total_bytes += out_path.stat().st_size
+            continue
+        _download_osf_file(f["links"]["download"], out_path, token)
+        downloaded.append(str(out_path))
+        total_bytes += out_path.stat().st_size
+    return {
+        "dataset": "chauhan_v9ewj",
+        "files_downloaded": len(downloaded),
+        "target_dir": str(target),
+        "bytes": total_bytes,
     }
 
 
@@ -365,6 +548,8 @@ def main() -> int:
     parser.add_argument("--yoto-batch-size", type=int, default=5, help="Number of YOTO subjects per batch.")
     parser.add_argument("--yoto-batch-index", type=int, default=0, help="Zero-based YOTO batch index.")
     parser.add_argument("--skip-other", action="store_true", help="When using --yoto-five, skip other datasets (ds004621, Hajonides).")
+    parser.add_argument("--color", action="store_true", help="Download color EEG datasets: Hajonides, Bae & Luck, Chauhan (max 10 subjects each).")
+    parser.add_argument("--color-max-subjects", type=int, default=10, help="Max subjects per color dataset (default 10).")
     parser.add_argument(
         "--raw-root",
         type=Path,
@@ -376,6 +561,24 @@ def main() -> int:
     raw_root = args.raw_root.expanduser()
     raw_root.mkdir(parents=True, exist_ok=True)
     downloads: list[dict] = []
+
+    if args.color:
+        print(f"Downloading color datasets (max {args.color_max_subjects} subjects each)...", flush=True)
+        for fn in (download_hajonides_color, download_baeluck_color, download_chauhan_color):
+            name = fn.__name__.replace("download_", "").replace("_color", "")
+            print(f"  {name}...", flush=True)
+            try:
+                res = fn(max_subjects=args.color_max_subjects, raw_root=raw_root)
+                downloads.append(res)
+                if res.get("error"):
+                    print(f"Warning: {res.get('dataset', '')} {res.get('error', '')}", flush=True)
+                else:
+                    print(f"    -> {res.get('files_downloaded', 0)} files", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"    Error: {exc}", flush=True)
+                downloads.append({"dataset": name, "error": str(exc)})
+        write_download_manifest(downloads)
+        return 0
 
     if args.yoto_five or args.yoto_all or args.yoto_batch:
         try:

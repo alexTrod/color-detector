@@ -21,8 +21,8 @@ preprocessing:
 
   rereference: average  # after ICA
 
-# Event-based epoching for tones
+# Event-based epoching for tones (baseline for ERP; longer window for auditory)
 epoch:
   tmin: -0.2
   tmax: 0.8
-  baseline: null  # no baseline correction in epoch; or (None, 0)
+  baseline: [-0.2, 0]  # pre-stimulus baseline correction

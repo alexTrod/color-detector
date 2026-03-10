@@ -1,0 +1,68 @@
+# Channel names for color datasets (no VHDR). Use 10-20 subset for LaBraM compatibility.
+# Hajonides: 61 BioSemi; Bae & Luck: 20+ BioSemi. List subset that exists in STANDARD_1020 in train_labram.
+hajonides_j289e:
+  - FP1
+  - FPZ
+  - FP2
+  - F7
+  - F3
+  - FZ
+  - F4
+  - F8
+  - T7
+  - C3
+  - CZ
+  - C4
+  - T8
+  - P7
+  - P3
+  - PZ
+  - P4
+  - P8
+  - O1
+  - OZ
+  - O2
+
+baeluck_jnwut:
+  - FP1
+  - FP2
+  - F7
+  - F3
+  - FZ
+  - F4
+  - F8
+  - T7
+  - C3
+  - CZ
+  - C4
+  - T8
+  - P7
+  - P3
+  - PZ
+  - P4
+  - P8
+  - O1
+  - O2
+
+chauhan_v9ewj:
+  - FP1
+  - FPZ
+  - FP2
+  - F7
+  - F3
+  - FZ
+  - F4
+  - F8
+  - T7
+  - C3
+  - CZ
+  - C4
+  - T8
+  - P7
+  - P3
+  - PZ
+  - P4
+  - P8
+  - O1
+  - OZ
+  - O2

@@ -178,6 +178,22 @@ def events_to_epochs(
     return epochs, np.array(valid_starts), stimulus_ids, onset_seconds
 
 
+def apply_epoch_baseline(epochs: np.ndarray, sfreq: float, tmin: float, baseline: tuple[float, float] | None) -> None:
+    """In-place baseline correction: subtract mean of baseline window from each epoch."""
+    if baseline is None or len(baseline) != 2:
+        return
+    tmin_ep, tmax_ep = float(tmin), float(epochs.shape[2] / sfreq + tmin)
+    b_start, b_end = baseline[0], baseline[1]
+    if b_start >= b_end or b_start < tmin_ep or b_end > tmax_ep:
+        return
+    i0 = int(round((b_start - tmin_ep) * sfreq))
+    i1 = int(round((b_end - tmin_ep) * sfreq))
+    if i0 < 0 or i1 > epochs.shape[2]:
+        return
+    baseline_mean = epochs[:, :, i0:i1].mean(axis=2, keepdims=True)
+    epochs -= baseline_mean
+
+
 def _estimate_global_onset_shift(
     vhdr_paths: list[Path],
     event_mapping: dict[int | str, str],
@@ -226,6 +242,11 @@ def run_preprocess_yoto(
     epoch_cfg = cfg_preproc.get("epoch", {})
     tmin = float(tmin_override if tmin_override is not None else epoch_cfg.get("tmin", -0.2))
     tmax = float(tmax_override if tmax_override is not None else epoch_cfg.get("tmax", 0.8))
+    baseline = epoch_cfg.get("baseline")
+    if isinstance(baseline, list) and len(baseline) == 2:
+        baseline = (float(baseline[0]), float(baseline[1]))
+    else:
+        baseline = None
 
     if manifest_path.exists():
         df = pd.read_csv(manifest_path)
@@ -285,6 +306,7 @@ def run_preprocess_yoto(
         )
         if epochs.size == 0:
             continue
+        apply_epoch_baseline(epochs, raw.info["sfreq"], tmin, baseline)
         parts = vhdr.parts
         subject_id = next((p for p in parts if p.startswith("sub-")), "unknown")
         stem = f"{dataset_id}__{subject_id}__{vhdr.stem}"

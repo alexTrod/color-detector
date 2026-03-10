@@ -1,0 +1,10 @@
+/home/alex/identificator/color-detector/.venv/lib/python3.12/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/home/alex/identificator/color-detector/.venv/lib/python3.12/site-packages/timm/models/registry.py:4: FutureWarning: Importing from timm.models.registry is deprecated, please import via timm.models
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.models", FutureWarning)
+Training on 14488 samples across 20 subject groups
+Using 19 common channels: ['FP1', 'FP2', 'F7', 'F3', 'FZ', 'F4', 'F8', 'T7', 'C3', 'CZ', 'C4', 'T8', 'P7', 'P3', 'PZ', 'P4', 'P8', 'O1', 'O2']
+Loaded checkpoint weights: matched=219 missing=2 unexpected=0
+Accuracy (mean +/- std over 5 splits): 0.0025 +/- 0.0009
+Macro F1 (mean +/- std): 0.0006 +/- 0.0003
+Saved Labram metrics to runs/labram_metrics_color_combined.json
