@@ -177,9 +177,11 @@ def download_openneuro_subject(
     }.get(dataset_id, "*")
     if task_glob is not None:
         run_glob = task_glob
-    include = ["dataset_description.json", "CHANGES", "README", ".tsv"] # removed participants.tsv and participants.json
+    include: list[str] = []
     for sub in subjects:
-        include.append(f"{sub}/**/eeg/*task-task*")
+        # Keep this broad for cross-dataset compatibility (some datasets are not laid out
+        # under sub-*/**/eeg with predictable task naming).
+        include.append(f"{sub}/**")
     openneuro.download(
         dataset=dataset_id,
         target_dir=target,
@@ -371,11 +373,39 @@ def main() -> int:
         default=RAW_ROOT,
         help=f"Root directory for downloads, e.g. {DEFAULT_USB_ROOT}",
     )
+    parser.add_argument("--dataset-id", type=str, default="", help="OpenNeuro dataset ID to download.")
+    parser.add_argument(
+        "--max-subjects",
+        type=int,
+        default=1,
+        help="Max subjects for --dataset-id (set to 0 for all).",
+    )
+    parser.add_argument(
+        "--task-glob",
+        type=str,
+        default="",
+        help="Glob to filter EEG files for --dataset-id (e.g. '*task-*').",
+    )
     args = parser.parse_args()
 
     raw_root = args.raw_root.expanduser()
     raw_root.mkdir(parents=True, exist_ok=True)
     downloads: list[dict] = []
+
+    if args.dataset_id:
+        max_subjects = None if args.max_subjects == 0 else int(args.max_subjects)
+        subjects = openneuro_subject_list(args.dataset_id, max_subjects=max_subjects)
+        task_glob = args.task_glob if args.task_glob else None
+        downloads.append(
+            download_openneuro_subject(
+                args.dataset_id,
+                subjects=subjects,
+                task_glob=task_glob,
+                raw_root=raw_root,
+            )
+        )
+        write_download_manifest(downloads)
+        return 0
 
     if args.yoto_five or args.yoto_all or args.yoto_batch:
         try:
