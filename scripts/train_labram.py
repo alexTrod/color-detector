@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import mne
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score
 from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit
@@ -79,6 +80,26 @@ def read_brainvision_channel_names(vhdr_path: Path) -> list[str]:
     return channel_names
 
 
+def read_channel_names(source_path: Path) -> list[str]:
+    ext = source_path.suffix.lower()
+    if ext == ".vhdr":
+        return read_brainvision_channel_names(source_path)
+    try:
+        if ext == ".set":
+            raw = mne.io.read_raw_eeglab(source_path, preload=False, verbose=False)
+        elif ext == ".edf":
+            raw = mne.io.read_raw_edf(source_path, preload=False, verbose=False)
+        elif ext == ".bdf":
+            raw = mne.io.read_raw_bdf(source_path, preload=False, verbose=False)
+        elif ext == ".fif":
+            raw = mne.io.read_raw_fif(source_path, preload=False, verbose=False)
+        else:
+            return []
+    except Exception:  # noqa: BLE001
+        return []
+    return [canonicalize_channel_name(ch) for ch in raw.ch_names if canonicalize_channel_name(ch)]
+
+
 def resample_last_axis(arr: np.ndarray, target_len: int) -> np.ndarray:
     if arr.shape[-1] == target_len:
         return arr.astype(np.float32, copy=False)
@@ -120,7 +141,7 @@ def collect_channel_layouts(df: pd.DataFrame) -> tuple[list[str], dict[str, list
         source_path = Path(source_file)
         if not source_path.is_absolute():
             source_path = ROOT / source_path
-        channels = read_brainvision_channel_names(source_path)
+        channels = read_channel_names(source_path)
         usable = [ch for ch in channels if ch in STANDARD_1020]
         if not usable:
             raise ValueError(f"No LaBraM-compatible 10-20 channels found in {source_path}")
@@ -327,12 +348,21 @@ def train_labram(
     freeze_backbone_epochs: int = 2,
     backbone_lr_scale: float = 0.1,
     weight_decay: float = 0.05,
+    keep_labels: list[str] | None = None,
     write_json: bool = True,
 ) -> dict:
     np.random.seed(SEED)
     torch.manual_seed(SEED)
 
     X, y, groups, channel_names = load_data(epoch_index_path)
+    if keep_labels:
+        keep_set = {lbl.strip() for lbl in keep_labels if lbl.strip()}
+        mask = np.array([str(lbl) in keep_set for lbl in y], dtype=bool)
+        X = X[mask]
+        y = y[mask]
+        groups = groups[mask]
+        print(f"Filtered to labels {sorted(keep_set)}: {len(y)} samples remain")
+
     if len(y) < 2:
         print(f"Not enough samples ({len(y)}); need at least 2.")
         return {"accuracy": None, "macro_f1": None, "n_train": 0, "n_test": 0, "label_classes": []}
@@ -415,7 +445,14 @@ def main() -> int:
     parser.add_argument("--weight-decay", type=float, default=0.05)
     parser.add_argument("--epoch-index", type=str, default=str(EPOCH_INDEX))
     parser.add_argument("--out-metrics", type=str, default=str(OUT_METRICS))
+    parser.add_argument(
+        "--keep-labels",
+        type=str,
+        default="",
+        help="Comma-separated label list to keep (e.g. 'auditory,visual').",
+    )
     args = parser.parse_args()
+    keep_labels = [s.strip() for s in args.keep_labels.split(",")] if args.keep_labels else None
     train_labram(
         epoch_index_path=Path(args.epoch_index),
         out_metrics_path=Path(args.out_metrics),
@@ -427,6 +464,7 @@ def main() -> int:
         freeze_backbone_epochs=args.freeze_backbone_epochs,
         backbone_lr_scale=args.backbone_lr_scale,
         weight_decay=args.weight_decay,
+        keep_labels=keep_labels,
         write_json=True,
     )
     return 0

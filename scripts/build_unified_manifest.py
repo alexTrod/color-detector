@@ -21,9 +21,22 @@ def infer_subject(path: Path) -> str:
     return m.group(1) if m else "unknown_subject"
 
 
+def infer_task_entity(path: Path) -> str:
+    m = re.search(r"task-([A-Za-z0-9]+)", path.name, flags=re.IGNORECASE)
+    return m.group(1).lower() if m else ""
+
+
 def infer_modality(path: Path) -> str:
     name = path.name.lower()
-    if "audiovisual" in name or "av" in name:
+    task = infer_task_entity(path)
+
+    # Explicit BIDS task mapping for ERP CORE-like naming.
+    if task in {"mmn", "auditory"}:
+        return "auditory"
+    if task in {"n170", "n2pc", "p3", "p3b", "p300", "n400", "ern", "flanker", "visual"}:
+        return "visual"
+
+    if "audiovisual" in name or re.search(r"(^|[_-])av([_-]|$)", name):
         return "audiovisual"
     if any(k in name for k in ["audio", "auditory", "oddball", "tone", "vowel"]):
         return "auditory"
@@ -34,6 +47,9 @@ def infer_modality(path: Path) -> str:
 
 def infer_task_label(path: Path) -> str:
     name = path.name.lower()
+    task = infer_task_entity(path)
+    if task:
+        return task
     if "rest" in name:
         return "rest"
     if "oddball" in name:
@@ -61,7 +77,11 @@ def build_manifest() -> list[dict]:
                 "file_ext": p.suffix.lower(),
                 "modality": infer_modality(p),
                 "task_label": infer_task_label(p),
-                "has_events_sidecar": p.with_suffix(".tsv").exists() or p.with_suffix(".json").exists(),
+                "has_events_sidecar": (
+                    p.with_suffix(".tsv").exists()
+                    or p.with_suffix(".json").exists()
+                    or p.with_name(p.name.replace("_eeg", "_events")).with_suffix(".tsv").exists()
+                ),
             }
         )
     return rows
