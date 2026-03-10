@@ -351,7 +351,7 @@ def train_labram(
     keep_labels: list[str] | None = None,
     balance_classes: bool = True,
     probe_c: float = 10.0,
-    probe_solver: str = "liblinear",
+    probe_solver: str = "lbfgs",
     probe_class_weight: str = "balanced",
     write_json: bool = True,
 ) -> dict:
@@ -476,7 +476,7 @@ def main() -> int:
     )
     parser.add_argument("--no-balance-classes", action="store_true", help="Disable class downsampling balance.")
     parser.add_argument("--probe-c", type=float, default=10.0)
-    parser.add_argument("--probe-solver", type=str, default="liblinear")
+    parser.add_argument("--probe-solver", type=str, default="lbfgs")
     parser.add_argument(
         "--probe-class-weight",
         type=str,

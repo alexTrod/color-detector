@@ -9,3 +9,13 @@ ce4effe	0.434761	0.0	keep	downsample to balanced classes before split
 49ac218	0.437223	0.0	discard	remove per-epoch baseline subtraction
 868b18b	0.432792	0.0	keep	use liblinear solver with balanced downsampling
 d98b493	0.429838	0.0	keep	tune C to 10 with liblinear
+bb7f631	0.429838	0.0	discard	exp11_baseline_c10_liblinear_balanced
+bb7f631	0.434269	0.0	discard	exp12_c5_liblinear_balanced
+bb7f631	0.432792	0.0	discard	exp13_c20_liblinear_balanced
+bb7f631	0.452486	0.0	discard	exp14_c1_liblinear_balanced
+bb7f631	0.429345	0.0	keep	exp15_c10_lbfgs_balanced
+bb7f631	0.434269	0.0	discard	exp16_c10_saga_balanced
+bb7f631	0.437223	0.0	discard	exp17_c10_liblinear_none
+bb7f631	0.433284	0.0	discard	exp18_c5_liblinear_none
+bb7f631	0.477016	0.0	discard	exp19_c10_liblinear_balanced_nobal
+bb7f631	0.437715	0.0	discard	exp20_c10_lbfgs_none
