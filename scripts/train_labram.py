@@ -349,6 +349,10 @@ def train_labram(
     backbone_lr_scale: float = 0.1,
     weight_decay: float = 0.05,
     keep_labels: list[str] | None = None,
+    balance_classes: bool = True,
+    probe_c: float = 10.0,
+    probe_solver: str = "liblinear",
+    probe_class_weight: str = "balanced",
     write_json: bool = True,
 ) -> dict:
     np.random.seed(SEED)
@@ -365,7 +369,7 @@ def train_labram(
 
     # Balance classes by downsampling the majority class to stabilize the probe.
     unique_labels, counts = np.unique(y, return_counts=True)
-    if len(unique_labels) > 1 and counts.max() != counts.min():
+    if balance_classes and len(unique_labels) > 1 and counts.max() != counts.min():
         rng = np.random.default_rng(SEED)
         target = int(counts.min())
         kept_idx = []
@@ -413,9 +417,9 @@ def train_labram(
         StandardScaler(),
         LogisticRegression(
             max_iter=3000,
-            class_weight="balanced",
-            C=10.0,
-            solver="liblinear",
+            class_weight=None if probe_class_weight in {"none", "None", ""} else probe_class_weight,
+            C=float(probe_c),
+            solver=probe_solver,
             random_state=SEED,
         ),
     )
@@ -439,7 +443,10 @@ def train_labram(
         "channel_names": channel_names,
         "labram_feature_dim": int(labram_features.shape[1]),
         "erp_summary_dim": int(erp_summary.shape[1]),
-        "probe_c": 10.0,
+        "probe_c": float(probe_c),
+        "probe_solver": probe_solver,
+        "probe_class_weight": probe_class_weight,
+        "balance_classes": bool(balance_classes),
         "note": "Uses official pretrained LaBraM as a frozen encoder on the true EEG channel layout, then fits a regularized linear probe on LaBraM features plus compact ERP summary features.",
     }
     if write_json:
@@ -467,6 +474,15 @@ def main() -> int:
         default="",
         help="Comma-separated label list to keep (e.g. 'auditory,visual').",
     )
+    parser.add_argument("--no-balance-classes", action="store_true", help="Disable class downsampling balance.")
+    parser.add_argument("--probe-c", type=float, default=10.0)
+    parser.add_argument("--probe-solver", type=str, default="liblinear")
+    parser.add_argument(
+        "--probe-class-weight",
+        type=str,
+        default="balanced",
+        help="Class weight for logistic probe; use 'none' for no weighting.",
+    )
     args = parser.parse_args()
     keep_labels = [s.strip() for s in args.keep_labels.split(",")] if args.keep_labels else None
     train_labram(
@@ -481,6 +497,10 @@ def main() -> int:
         backbone_lr_scale=args.backbone_lr_scale,
         weight_decay=args.weight_decay,
         keep_labels=keep_labels,
+        balance_classes=not args.no_balance_classes,
+        probe_c=args.probe_c,
+        probe_solver=args.probe_solver,
+        probe_class_weight=args.probe_class_weight,
         write_json=True,
     )
     return 0
