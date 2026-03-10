@@ -399,7 +399,7 @@ def train_labram(
         LogisticRegression(
             max_iter=3000,
             class_weight="balanced",
-            C=5.0,
+            C=20.0,
             random_state=SEED,
         ),
     )
@@ -423,7 +423,7 @@ def train_labram(
         "channel_names": channel_names,
         "labram_feature_dim": int(labram_features.shape[1]),
         "erp_summary_dim": int(erp_summary.shape[1]),
-        "probe_c": 5.0,
+        "probe_c": 20.0,
         "note": "Uses official pretrained LaBraM as a frozen encoder on the true EEG channel layout, then fits a regularized linear probe on LaBraM features plus compact ERP summary features.",
     }
     if write_json:
